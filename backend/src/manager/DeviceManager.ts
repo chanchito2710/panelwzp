@@ -1,0 +1,1371 @@
+import makeWASocket, {
+    DisconnectReason,
+    useMultiFileAuthState,
+    fetchLatestBaileysVersion,
+    makeCacheableSignalKeyStore,
+    WAProto,
+    downloadMediaMessage
+} from '@whiskeysockets/baileys';
+import { Boom } from '@hapi/boom';
+import pino from 'pino';
+import path from 'path';
+import fs from 'fs';
+import os from 'os';
+import crypto from 'crypto';
+import { spawn } from 'child_process';
+import ffmpegPath from 'ffmpeg-static';
+import { Server as SocketServer } from 'socket.io';
+import cron from 'node-cron';
+import { encryptSensitiveFields, decryptSensitiveFields } from '../utils/crypto';
+import { DB_ROOT, dbPath } from '../config/paths';
+import { ensureDir } from '../config/ensureDir';
+
+const logger = pino({ level: 'info' });
+
+// Store simple en memoria para chats, mensajes y contactos
+interface SimpleStore {
+    chats: Map<string, any>;
+    messages: Map<string, any[]>;
+    contacts: Map<string, string>; // jid -> nombre
+}
+
+const stores: Map<string, SimpleStore> = new Map();
+
+function createSimpleStore(): SimpleStore {
+    return {
+        chats: new Map(),
+        messages: new Map(),
+        contacts: new Map()
+    };
+}
+
+function chatKeyOf(chatId: string): string {
+    if (!chatId) return chatId;
+    if (chatId.includes('@lid')) return chatId;
+    if (chatId.endsWith('@g.us')) return chatId;
+    const prefix = chatId.split('@')[0] || chatId;
+    return prefix.split(':')[0] || prefix;
+}
+
+interface Device {
+    id: string;
+    name: string;
+    phoneNumber: string | null;
+    status: 'CONNECTED' | 'DISCONNECTED' | 'QR_READY' | 'CONNECTING' | 'PAIRING_CODE_READY';
+    qr: string | null;
+}
+
+interface FileMetadata {
+    id: string;
+    deviceId: string;
+    chatId: string;
+    fileName: string;
+    path: string;
+    mimeType: string;
+    size: number;
+    timestamp: number;
+}
+
+export class DeviceManager {
+    private static instance: DeviceManager;
+    private sessions: Map<string, any> = new Map();
+    private devices: Device[] = [];
+    private io: SocketServer | null = null;
+    private pendingPanelSends: Map<string, Array<{ id?: string; chatId: string; text?: string | null; timestamp: number }>> = new Map();
+    private storageRoot = dbPath('storage');
+    private devicesPath = dbPath('devices.json');
+    private filesPath = dbPath('files.json');
+    private pairingMode: Map<string, 'qr' | 'code'> = new Map();
+    private reconnectAttempts: Map<string, number> = new Map();
+    private connectWatchdogs: Map<string, NodeJS.Timeout> = new Map();
+    private pairingCodeLastAt: Map<string, number> = new Map();
+
+    private constructor() {
+        ensureDir(DB_ROOT);
+        ensureDir(this.storageRoot);
+        this.loadData();
+        this.initRetentionJob();
+    }
+
+    private clearConnectWatchdog(deviceId: string) {
+        const t = this.connectWatchdogs.get(deviceId);
+        if (t) {
+            clearTimeout(t);
+            this.connectWatchdogs.delete(deviceId);
+        }
+    }
+
+    private startConnectWatchdog(deviceId: string, sock: any) {
+        this.clearConnectWatchdog(deviceId);
+
+        if ((this.pairingMode.get(deviceId) || 'qr') !== 'qr') return;
+
+        const timeoutMs = 25000;
+        const timer = setTimeout(() => {
+            const current = this.devices.find(d => d.id === deviceId);
+            if (!current) return;
+            if (current.status !== 'CONNECTING') return;
+            if (current.qr) return;
+
+            const attempt = (this.reconnectAttempts.get(deviceId) || 0) + 1;
+            this.reconnectAttempts.set(deviceId, attempt);
+
+            try {
+                if (typeof sock?.end === 'function') sock.end(new Error('CONNECT_TIMEOUT'));
+                else if (sock?.ws?.close) sock.ws.close();
+            } catch {}
+
+            this.sessions.delete(deviceId);
+            stores.delete(deviceId);
+            this.updateDevice(deviceId, { status: 'DISCONNECTED', qr: null, phoneNumber: null });
+
+            if (attempt <= 2) {
+                setTimeout(() => {
+                    this.initDevice(deviceId, 'qr');
+                }, 800);
+            }
+        }, timeoutMs);
+
+        this.connectWatchdogs.set(deviceId, timer);
+    }
+
+    private loadData() {
+        if (!fs.existsSync(this.storageRoot)) fs.mkdirSync(this.storageRoot, { recursive: true });
+
+        if (fs.existsSync(this.devicesPath)) {
+            const rawData = JSON.parse(fs.readFileSync(this.devicesPath, 'utf-8'));
+            // Desencriptar campos sensibles al cargar
+            this.devices = rawData.map((device: Device) =>
+                decryptSensitiveFields(device, ['phoneNumber', 'qr'])
+            );
+        }
+    }
+
+    private saveDevices() {
+        // Encriptar campos sensibles antes de guardar
+        const encryptedDevices = this.devices.map(device =>
+            encryptSensitiveFields(device, ['phoneNumber', 'qr'])
+        );
+        fs.writeFileSync(this.devicesPath, JSON.stringify(encryptedDevices, null, 2));
+    }
+
+    public static getInstance(): DeviceManager {
+        if (!DeviceManager.instance) {
+            DeviceManager.instance = new DeviceManager();
+        }
+        return DeviceManager.instance;
+    }
+
+    private rememberPanelSend(deviceId: string, chatId: string, entry: { id?: string; text?: string | null; timestamp: number }) {
+        const list = this.pendingPanelSends.get(deviceId) || [];
+        list.push({ chatId, ...entry });
+        if (list.length > 200) list.splice(0, list.length - 200);
+        this.pendingPanelSends.set(deviceId, list);
+    }
+
+    private computeTotalUnread(deviceId: string): number {
+        const store = stores.get(deviceId);
+        if (!store) return 0;
+        let total = 0;
+        for (const chat of store.chats.values()) {
+            const n = Number(chat?.unreadCount || 0);
+            if (Number.isFinite(n) && n > 0) total += n;
+        }
+        return total;
+    }
+
+    private resolveSource(deviceId: string, chatId: string, msgId: string | undefined, text: string | null, timestamp: number, fromMe: boolean): 'panel' | 'phone' | 'contact' {
+        if (!fromMe) return 'contact';
+
+        const list = this.pendingPanelSends.get(deviceId);
+        if (!list || list.length === 0) return 'phone';
+
+        const byIdIndex = msgId ? list.findIndex(e => e.id === msgId) : -1;
+        if (byIdIndex >= 0) {
+            list.splice(byIdIndex, 1);
+            this.pendingPanelSends.set(deviceId, list);
+            return 'panel';
+        }
+
+        if (text) {
+            const maxAgeMs = 15000;
+            const idx = list.findIndex(e =>
+                e.chatId === chatId &&
+                e.text === text &&
+                Math.abs(timestamp - e.timestamp) <= maxAgeMs
+            );
+            if (idx >= 0) {
+                list.splice(idx, 1);
+                this.pendingPanelSends.set(deviceId, list);
+                return 'panel';
+            }
+        }
+
+        return 'phone';
+    }
+
+    private async transcodeToOggOpus(inputBuffer: Buffer): Promise<Buffer> {
+        if (!ffmpegPath) throw new Error('ffmpeg no disponible');
+        const ffmpeg = ffmpegPath as string;
+
+        const base = crypto.randomUUID();
+        const inPath = path.join(os.tmpdir(), `${base}.webm`);
+        const outPath = path.join(os.tmpdir(), `${base}.ogg`);
+
+        await fs.promises.writeFile(inPath, inputBuffer);
+
+        try {
+            await new Promise<void>((resolve, reject) => {
+                const args = [
+                    '-y',
+                    '-i', inPath,
+                    '-c:a', 'libopus',
+                    '-b:a', '24k',
+                    '-vbr', 'on',
+                    '-compression_level', '10',
+                    '-application', 'voip',
+                    '-f', 'ogg',
+                    outPath
+                ];
+
+                const proc = spawn(ffmpeg, args, { windowsHide: true }) as import('child_process').ChildProcessWithoutNullStreams;
+                let stderr = '';
+
+                proc.stderr.on('data', (chunk: Buffer) => {
+                    stderr += chunk?.toString?.() ?? '';
+                });
+
+                proc.on('error', reject);
+                proc.on('close', (code) => {
+                    if (code === 0) resolve();
+                    else reject(new Error(stderr || `ffmpeg exit code ${code}`));
+                });
+            });
+
+            return await fs.promises.readFile(outPath);
+        } finally {
+            await fs.promises.rm(inPath, { force: true }).catch(() => {});
+            await fs.promises.rm(outPath, { force: true }).catch(() => {});
+        }
+    }
+
+    public setIO(io: SocketServer) {
+        this.io = io;
+        // Auto-reconectar dispositivos que tienen credenciales guardadas
+        this.autoReconnectDevices();
+    }
+
+    private async autoReconnectDevices() {
+        const authDir = dbPath('auth');
+
+        for (const device of this.devices) {
+            const deviceAuthPath = path.join(authDir, device.id);
+            const credsPath = path.join(deviceAuthPath, 'creds.json');
+
+            // Solo auto-reconectar si tiene credenciales COMPLETAS (creds.json existe y tiene contenido)
+            // Esto evita generar QRs automáticamente para dispositivos no vinculados
+            if (fs.existsSync(credsPath)) {
+                try {
+                    const credsContent = fs.readFileSync(credsPath, 'utf-8');
+                    const creds = JSON.parse(credsContent);
+                    
+                    // Verificar que tenga credenciales de registro (significa que ya estuvo conectado)
+                    if (creds.registered) {
+                        console.log(`[${device.id}] Auto-reconectando dispositivo ${device.name}...`);
+                        device.status = 'DISCONNECTED';
+                        try {
+                            await this.initDevice(device.id, 'qr');
+                        } catch (error) {
+                            console.error(`[${device.id}] Error al auto-reconectar:`, error);
+                        }
+                    } else {
+                        // Tiene creds pero no está registrado, marcar como desconectado
+                        console.log(`[${device.id}] Dispositivo no registrado, requiere escaneo QR`);
+                        device.status = 'DISCONNECTED';
+                    }
+                } catch (error) {
+                    // Error al leer creds, marcar como desconectado
+                    device.status = 'DISCONNECTED';
+                }
+            } else {
+                // No tiene credenciales, marcar como desconectado
+                device.status = 'DISCONNECTED';
+            }
+        }
+
+        this.saveDevices();
+    }
+
+    public getDevices() {
+        return (this.devices || [])
+            .filter(Boolean)
+            .map((device: any) => {
+                const id = String(device?.id ?? '');
+                const base = {
+                    id,
+                    name: String(device?.name ?? ''),
+                    phoneNumber: device?.phoneNumber ?? null,
+                    status: device?.status ?? 'DISCONNECTED',
+                    qr: device?.qr ?? null
+                };
+                let unreadCount = 0;
+                try {
+                    if (id) unreadCount = this.computeTotalUnread(id);
+                } catch {
+                    unreadCount = 0;
+                }
+                return { ...base, ...device, id, unreadCount };
+            });
+    }
+
+    public createDevice(name: string) {
+        const id = Math.random().toString(36).substr(2, 9);
+        const newDevice: Device = { id, name, phoneNumber: null, status: 'DISCONNECTED', qr: null };
+        this.devices.push(newDevice);
+        this.saveDevices();
+        return newDevice;
+    }
+
+    private updateDevice(id: string, data: Partial<Device>) {
+        const index = this.devices.findIndex(d => d.id === id);
+        if (index !== -1) {
+            this.devices[index] = { ...this.devices[index]!, ...data };
+            this.saveDevices();
+            this.io?.emit('device:update', this.devices[index]);
+        }
+    }
+
+    public renameDevice(id: string, name: string) {
+        if (typeof name !== 'string') throw new Error('Nombre inválido');
+        const trimmedName = name.trim();
+        if (!trimmedName) throw new Error('El nombre no puede estar vacío');
+        if (trimmedName.length > 60) throw new Error('El nombre es demasiado largo');
+
+        const exists = this.devices.some(d => d.id === id);
+        if (!exists) return null;
+
+        this.updateDevice(id, { name: trimmedName });
+        return this.devices.find(d => d.id === id) || null;
+    }
+
+    private initRetentionJob() {
+        // Run every day at midnight
+        cron.schedule('0 0 * * *', () => {
+            logger.info('Running retention policy job...');
+            this.cleanupOldFiles(30); // 30 days retention
+        });
+    }
+
+    private cleanupOldFiles(days: number) {
+        const threshold = Date.now() - (days * 24 * 60 * 60 * 1000);
+        // Logic to delete files from storageRoot based on file system stats
+        // This is a simplified version
+    }
+
+    private async handleMedia(deviceId: string, msg: any) {
+        const messageType = Object.keys(msg.message || {})[0];
+        if (!['imageMessage', 'videoMessage', 'audioMessage', 'documentMessage'].includes(messageType || '')) return null;
+
+        try {
+            const buffer = await downloadMediaMessage(msg, 'buffer', {}, { logger, reuploadRequest: (sock: any) => sock.updateMediaMessage(msg) });
+            const chatId_sanitized = msg.key.remoteJid.replace(/[^a-zA-Z0-9]/g, '_');
+            const dir = path.join(this.storageRoot, deviceId, chatId_sanitized);
+            if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+
+            const rawMime = String(msg.message[messageType!].mimetype || '');
+            const cleanMime = (rawMime.split(';')[0] ?? '').trim();
+            const rawExt = cleanMime.split('/')[1] || 'bin';
+            const ext = rawExt.replace(/[^a-zA-Z0-9]+/g, '_').slice(0, 16) || 'bin';
+            const fileName = `${msg.key.id}.${ext}`;
+            const filePath = path.join(dir, fileName);
+
+            fs.writeFileSync(filePath, buffer);
+
+            const relativePath = `${deviceId}/${chatId_sanitized}/${fileName}`;
+            const url = `/storage/${relativePath}`;
+
+            return {
+                id: msg.key.id!,
+                deviceId,
+                chatId: msg.key.remoteJid,
+                fileName,
+                path: filePath,
+                url,
+                mimeType: msg.message[messageType!].mimetype,
+                size: buffer.length,
+                timestamp: Date.now()
+            };
+        } catch (err) {
+            logger.error(`Failed to download media: ${err}`);
+            return null;
+        }
+    }
+
+    public async initDevice(deviceId: string, mode?: 'qr' | 'code') {
+        const existingDevice = this.devices.find(d => d.id === deviceId);
+        if (!existingDevice) throw new Error('Dispositivo no encontrado');
+
+        if (this.sessions.has(deviceId)) {
+            this.updateDevice(deviceId, { status: 'CONNECTING' });
+            return;
+        }
+        if (mode) this.pairingMode.set(deviceId, mode);
+
+        this.updateDevice(deviceId, { status: 'CONNECTING', qr: null });
+
+        const authPath = dbPath('auth', deviceId);
+        const { state, saveCreds } = await useMultiFileAuthState(authPath);
+        const { version } = await fetchLatestBaileysVersion();
+
+        // Crear store simple en memoria para este dispositivo
+        const store = createSimpleStore();
+        stores.set(deviceId, store);
+
+        const currentMode = this.pairingMode.get(deviceId) || mode || 'qr';
+        
+        // Estrategia agresiva: Edge en Windows suele ser muy estable para pairing
+        const browser = currentMode === 'code'
+            ? ["Chrome (Windows)", "Chrome", "131.0.0.0"]
+            : ["Panel Multi-Dispositivo", "Chrome", "1.0.0"];
+
+        const sock = makeWASocket({
+            version,
+            auth: {
+                creds: state.creds,
+                keys: makeCacheableSignalKeyStore(state.keys, logger),
+            },
+            logger,
+            printQRInTerminal: false,
+            // Forzar escritorio
+            mobile: false,
+            // Configuración de red más tolerante
+            retryRequestDelayMs: 5000,
+            connectTimeoutMs: 60000,
+            keepAliveIntervalMs: 10000,
+            // Evitar marcas de online prematuras
+            markOnlineOnConnect: false,
+            generateHighQualityLinkPreview: true,
+            browser: browser as any
+        });
+
+        this.sessions.set(deviceId, sock);
+        this.startConnectWatchdog(deviceId, sock);
+        sock.ev.on('creds.update', saveCreds);
+
+        sock.ev.on('connection.update', (update) => {
+            const { connection, lastDisconnect, qr } = update;
+            const currentMode = this.pairingMode.get(deviceId) || 'qr';
+            if (qr && currentMode !== 'code') {
+                this.clearConnectWatchdog(deviceId);
+                this.updateDevice(deviceId, { qr, status: 'QR_READY' });
+            }
+
+            if (connection === 'close') {
+                this.clearConnectWatchdog(deviceId);
+                const statusCode = (lastDisconnect?.error as Boom)?.output?.statusCode;
+
+                if (statusCode === DisconnectReason.loggedOut) {
+                    this.sessions.delete(deviceId);
+                    stores.delete(deviceId);
+
+                    if (currentMode === 'qr') {
+                        const attempt = (this.reconnectAttempts.get(deviceId) || 0) + 1;
+                        this.reconnectAttempts.set(deviceId, attempt);
+
+                        this.updateDevice(deviceId, { status: 'CONNECTING', qr: null, phoneNumber: null });
+                        try {
+                            fs.rmSync(authPath, { recursive: true, force: true });
+                        } catch {}
+
+                        if (attempt <= 2) {
+                            setTimeout(() => {
+                                this.initDevice(deviceId, 'qr');
+                            }, 600);
+                        } else {
+                            this.updateDevice(deviceId, { status: 'DISCONNECTED', qr: null, phoneNumber: null });
+                        }
+                    } else {
+                        this.updateDevice(deviceId, { status: 'DISCONNECTED', qr: null });
+                    }
+                    return;
+                }
+
+                if (statusCode === DisconnectReason.restartRequired) {
+                    this.sessions.delete(deviceId);
+                    this.updateDevice(deviceId, { status: 'CONNECTING', qr: null });
+                    setTimeout(() => this.initDevice(deviceId), 600);
+                    return;
+                }
+
+                const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+                if (shouldReconnect) {
+                    this.sessions.delete(deviceId);
+                    const attempt = (this.reconnectAttempts.get(deviceId) || 0) + 1;
+                    this.reconnectAttempts.set(deviceId, attempt);
+                    const delayMs = Math.min(15000, 750 * Math.pow(2, Math.max(0, attempt - 1)));
+                    this.updateDevice(deviceId, { status: 'CONNECTING', qr: null });
+                    setTimeout(() => {
+                        this.initDevice(deviceId);
+                    }, delayMs);
+                } else {
+                    this.updateDevice(deviceId, { status: 'DISCONNECTED', qr: null });
+                    this.sessions.delete(deviceId);
+                }
+            } else if (connection === 'open') {
+                this.clearConnectWatchdog(deviceId);
+                this.reconnectAttempts.set(deviceId, 0);
+                const phoneNumber = sock.user?.id.split(':')[0] || null;
+                this.updateDevice(deviceId, { status: 'CONNECTED', phoneNumber, qr: null });
+            }
+        });
+
+        sock.ev.on('messages.upsert', async (m) => {
+            for (const msg of m.messages) {
+                const originalChatId = msg.key.remoteJid;
+                if (!originalChatId) continue;
+
+                // Ignorar mensajes de status/broadcast
+                if (originalChatId === 'status@broadcast') continue;
+
+                // Ignorar mensajes de protocolo (confirmaciones, recibos de lectura, etc.)
+                const msgType = Object.keys(msg.message || {})[0];
+                if (msgType === 'protocolMessage' || msgType === 'senderKeyDistributionMessage') {
+                    console.log(`[${deviceId}] Ignorando mensaje de protocolo: ${msgType}`);
+                    continue;
+                }
+
+                // Ignorar mensajes sin contenido útil (reacciones, etc.)
+                if (msgType === 'reactionMessage' || msgType === 'pollUpdateMessage') {
+                    continue;
+                }
+
+                // Usar el chatId original sin modificar - NO convertir @lid a @s.whatsapp.net
+                // porque los LIDs son identificadores de privacidad que NO corresponden a números de teléfono
+                const chatId = originalChatId;
+
+                const chatKey = chatKeyOf(originalChatId);
+
+                // Buscar si ya existe un chat con el mismo número (pero posiblemente diferente sufijo)
+                const store = stores.get(deviceId);
+                let unifiedChatId = chatId;
+                if (store) {
+                    for (const existingChatId of store.chats.keys()) {
+                        const existingKey = chatKeyOf(existingChatId);
+                        if (existingKey === chatKey && existingChatId !== chatId) {
+                            // Ya existe un chat con el mismo número, usar el existente
+                            unifiedChatId = existingChatId;
+                            console.log(`[${deviceId}] Unificando chat: ${chatId} -> ${unifiedChatId}`);
+                            break;
+                        }
+                    }
+                }
+
+                const mediaMetadata = await this.handleMedia(deviceId, msg);
+
+                // Extraer texto del mensaje
+                const text = msg.message?.conversation ||
+                    msg.message?.extendedTextMessage?.text ||
+                    msg.message?.imageMessage?.caption ||
+                    msg.message?.videoMessage?.caption ||
+                    msg.message?.documentMessage?.caption ||
+                    null;
+
+                const locationMessage = (msg.message as any)?.locationMessage || (msg.message as any)?.liveLocationMessage || null;
+                const location = locationMessage
+                    ? {
+                        latitude: Number(locationMessage.degreesLatitude),
+                        longitude: Number(locationMessage.degreesLongitude),
+                        name: locationMessage.name ?? null,
+                        address: locationMessage.address ?? null
+                    }
+                    : null;
+
+                const timestamp = msg.messageTimestamp ? Number(msg.messageTimestamp) * 1000 : Date.now();
+                const fromMe = !!msg.key.fromMe;
+                const source = this.resolveSource(deviceId, unifiedChatId, msg.key.id ?? undefined, text, timestamp, fromMe);
+
+                console.log(`[${deviceId}] Mensaje ${fromMe ? 'enviado' : 'recibido'}: ${text?.substring(0, 50) || '[media]'}`);
+
+                // Guardar en el store simple (store ya fue obtenido arriba)
+                if (store) {
+                    // Guardar pushName como nombre del contacto si existe
+                    const pushName = (msg as any).pushName;
+                    if (pushName && !msg.key.fromMe && unifiedChatId) {
+                        store.contacts.set(unifiedChatId, pushName);
+                        console.log(`[${deviceId}] pushName guardado: ${unifiedChatId} -> ${pushName}`);
+                    }
+
+                    // Obtener nombre del contacto si existe
+                    const contactName = store.contacts.get(unifiedChatId) || 
+                                       store.contacts.get(originalChatId) ||
+                                       pushName;
+
+                    // Determinar el nombre del chat
+                    let chatName: string;
+                    if (unifiedChatId.endsWith('@g.us')) {
+                        chatName = contactName || unifiedChatId.split('@')[0] + ' (Grupo)';
+                    } else {
+                        chatName = contactName || unifiedChatId.split('@')[0];
+                    }
+
+                    // Actualizar/crear chat usando unifiedChatId
+                    const existingChat = store.chats.get(unifiedChatId) || {
+                        id: unifiedChatId,
+                        name: chatName,
+                        conversationTimestamp: timestamp,
+                        unreadCount: 0
+                    };
+                    
+                    // Actualizar nombre si encontramos uno mejor
+                    if (contactName && existingChat.name !== contactName) {
+                        existingChat.name = contactName;
+                    }
+                    
+                    existingChat.conversationTimestamp = timestamp;
+                    if (!fromMe) existingChat.unreadCount++;
+                    store.chats.set(unifiedChatId, existingChat);
+
+                    // Guardar mensaje bajo el unifiedChatId
+                    if (!store.messages.has(unifiedChatId)) {
+                        store.messages.set(unifiedChatId, []);
+                    }
+                    store.messages.get(unifiedChatId)!.push({
+                        key: msg.key,
+                        message: msg.message,
+                        messageTimestamp: msg.messageTimestamp,
+                        text,
+                        fromMe,
+                        timestamp,
+                        media: mediaMetadata,
+                        location,
+                        source
+                    });
+                }
+
+                // Emitir con unifiedChatId para que el frontend use el mismo ID
+                this.io?.emit('message:new', {
+                    deviceId,
+                    chatId: unifiedChatId,
+                    msg: {
+                        id: msg.key.id,
+                        text,
+                        fromMe,
+                        timestamp,
+                        media: mediaMetadata,
+                        location,
+                        source
+                    }
+                });
+            }
+        });
+
+        sock.ev.on('presence.update', (p) => {
+            this.io?.emit('presence:update', { deviceId, ...p });
+        });
+
+        // Detectar llamadas entrantes
+        sock.ev.on('call', (calls: any[]) => {
+            for (const call of calls) {
+                // Solo nos interesan las llamadas entrantes (offer)
+                if (call.status === 'offer') {
+                    console.log(`[${deviceId}] Llamada entrante de ${call.from}`);
+                    this.io?.emit('call:incoming', {
+                        deviceId,
+                        callId: call.id,
+                        from: call.from,
+                        timestamp: call.date || Date.now(),
+                        isVideo: call.isVideo
+                    });
+                }
+            }
+        });
+
+        sock.ev.on('chats.update', (updates: any[]) => {
+            const store = stores.get(deviceId);
+            if (!store) return;
+
+            let changed = false;
+            for (const upd of updates) {
+                const id = String(upd?.id || '');
+                if (!id) continue;
+
+                const incomingUnread = upd?.unreadCount;
+                if (incomingUnread !== 0) continue;
+
+                const incomingKey = chatKeyOf(id);
+                const existingId = Array.from(store.chats.keys()).find((cid) => chatKeyOf(cid) === incomingKey) || id;
+
+                const chat = store.chats.get(existingId);
+                if (!chat) continue;
+
+                if (Number(chat.unreadCount || 0) > 0) {
+                    chat.unreadCount = 0;
+                    store.chats.set(existingId, chat);
+                    changed = true;
+                }
+            }
+
+            if (changed) {
+                this.io?.emit('device:unread:update', {
+                    deviceId,
+                    totalUnread: this.computeTotalUnread(deviceId)
+                });
+            }
+        });
+
+        // Escuchar sincronización de contactos del dispositivo
+        sock.ev.on('contacts.upsert', (contacts) => {
+            const store = stores.get(deviceId);
+            if (store) {
+                for (const contact of contacts) {
+                    if (contact.id && (contact.name || contact.notify)) {
+                        const contactName = contact.name || contact.notify || '';
+                        if (contactName) {
+                            store.contacts.set(contact.id, contactName);
+                            console.log(`[${deviceId}] Contacto guardado: ${contact.id} -> ${contactName}`);
+                        }
+                    }
+                }
+            }
+        });
+
+        sock.ev.on('contacts.update', (updates) => {
+            const store = stores.get(deviceId);
+            if (store) {
+                for (const update of updates) {
+                    if (update.id && (update.name || update.notify)) {
+                        const contactName = update.name || update.notify || '';
+                        if (contactName) {
+                            store.contacts.set(update.id, contactName);
+                        }
+                    }
+                }
+            }
+        });
+
+        return sock;
+    }
+
+    public async requestPairingCode(deviceId: string, phoneNumber: string) {
+        const httpError = (status: number, message: string) =>
+            Object.assign(new Error(message), { status });
+
+        if (typeof phoneNumber !== 'string') throw httpError(400, 'Número inválido');
+        // Eliminar caracteres no numéricos
+        let cleaned = phoneNumber.replace(/[^\d]/g, '');
+        if (cleaned.length < 8) throw httpError(400, 'Número inválido');
+
+        // Para Uruguay (598) y otros países, WhatsApp suele requerir el formato internacional estándar.
+        // Ejemplo Uruguay: 598 99 123 456 -> 59899123456
+        // Se envía el número limpio tal cual lo ingresa el usuario (sin hacks automáticos de país).
+        if (cleaned.startsWith('5980') && cleaned.length === 12) {
+            cleaned = `598${cleaned.slice(4)}`;
+        }
+
+        const device = this.devices.find(d => d.id === deviceId);
+        if (!device) throw httpError(404, 'Dispositivo no encontrado');
+        if (device.status === 'CONNECTED') throw httpError(409, 'El dispositivo ya está conectado');
+
+        const now = Date.now();
+        const cooldownMs = 20000;
+        const lastAt = this.pairingCodeLastAt.get(deviceId) || 0;
+        if (now - lastAt < cooldownMs) {
+            const waitSec = Math.ceil((cooldownMs - (now - lastAt)) / 1000);
+            throw httpError(429, `Esperá ${waitSec}s para generar otro código`);
+        }
+        this.pairingCodeLastAt.set(deviceId, now);
+
+        // Limpiar sesión previa para evitar conflictos
+        await this.disconnectAndClean(deviceId);
+        // Forzar borrado físico de carpeta auth por seguridad
+        const authPath = dbPath('auth', deviceId);
+        if (fs.existsSync(authPath)) {
+            try { fs.rmSync(authPath, { recursive: true, force: true }); } catch {}
+        }
+
+        this.pairingMode.set(deviceId, 'code');
+        this.updateDevice(deviceId, { status: 'CONNECTING', qr: null });
+
+        const masked = cleaned.length <= 4 ? '****' : `${'*'.repeat(Math.max(0, cleaned.length - 4))}${cleaned.slice(-4)}`;
+
+        let lastError: any = null;
+        for (let attempt = 1; attempt <= 3; attempt++) {
+            try {
+                console.log(`[${deviceId}] Pairing por código: intento ${attempt}...`);
+                await this.initDevice(deviceId, 'code');
+                const sock = this.sessions.get(deviceId);
+                if (!sock) throw new Error('Device not connected');
+                if (typeof sock.requestPairingCode !== 'function') throw new Error('Pairing por código no soportado');
+
+                const code = await new Promise<string>((resolve, reject) => {
+                    // Aumentar timeout a 60s para dar tiempo al usuario
+                    const timeoutMs = 60000;
+                    const timer = setTimeout(() => {
+                        cleanup();
+                        reject(new Error('Timeout esperando conexión para generar código'));
+                    }, timeoutMs);
+
+                    const handler = async (update: any) => {
+                        // Esperar a 'qr' es lo más seguro para saber que está listo para pairing
+                        if (update?.qr) {
+                            try {
+                                // Delay mayor para asegurar estabilidad del socket
+                                console.log(`[${deviceId}] Socket listo, esperando 4s antes de pedir código...`);
+                                await new Promise(r => setTimeout(r, 4000));
+                                console.log(`[${deviceId}] Solicitando código para ${masked}...`);
+                                const pairingCode = await sock.requestPairingCode(cleaned);
+                                resolve(pairingCode);
+                                cleanup();
+                            } catch (err) {
+                                console.error(`[${deviceId}] Error pidiendo código:`, err);
+                                reject(err);
+                                cleanup();
+                            }
+                        }
+                    };
+
+                    const cleanup = () => {
+                        clearTimeout(timer);
+                        sock.ev.off('connection.update', handler);
+                    };
+
+                    sock.ev.on('connection.update', handler);
+                });
+                this.updateDevice(deviceId, { status: 'PAIRING_CODE_READY', qr: null });
+                return { code };
+            } catch (error: any) {
+                lastError = error;
+                const msg = String(error?.message || error || '');
+                const retryable = msg.includes('Connection Closed') || msg.includes('Connection Failure') || msg.includes('connection errored');
+                if (!retryable || attempt === 3) break;
+                
+                await this.disconnectAndClean(deviceId);
+                await new Promise<void>(r => setTimeout(r, 1500 * attempt));
+            }
+        }
+
+        throw lastError || new Error('Error al generar código');
+    }
+
+    public async sendMessage(deviceId: string, chatId: string, text: string) {
+        const sock = this.sessions.get(deviceId);
+        if (!sock) throw new Error('Device not connected');
+
+        // NO convertir el chatId - usar tal cual viene
+        // Los LIDs son identificadores de privacidad y deben usarse directamente
+        const targetJid = chatId;
+
+        console.log(`[${deviceId}] Enviando mensaje a ${targetJid}: ${text.substring(0, 50)}...`);
+
+        try {
+            this.rememberPanelSend(deviceId, targetJid, { text, timestamp: Date.now() });
+            const result = await sock.sendMessage(targetJid, { text });
+            const msgId = result?.key?.id as string | undefined;
+            if (msgId) this.rememberPanelSend(deviceId, targetJid, { id: msgId, text, timestamp: Date.now() });
+            console.log(`[${deviceId}] Mensaje enviado, result:`, result?.key);
+            return result;
+        } catch (error: any) {
+            console.error(`[${deviceId}] Error enviando mensaje:`, error);
+            throw error;
+        }
+    }
+
+    public async sendMedia(deviceId: string, chatId: string, fileBuffer: Buffer, mimeType: string, caption?: string, isVoiceNote: boolean = false) {
+        const sock = this.sessions.get(deviceId);
+        if (!sock) throw new Error('Device not connected');
+
+        let messageContent: any;
+
+        if (mimeType.startsWith('image/')) {
+            messageContent = {
+                image: fileBuffer,
+                caption: caption || '',
+                contextInfo: {
+                    externalAdReply: {
+                        title: 'Panel WhatsApp',
+                        body: 'Imagen desde Administración',
+                        mediaType: 1
+                    }
+                }
+            };
+        } else if (mimeType === 'application/pdf' || mimeType.startsWith('application/')) {
+            messageContent = {
+                document: fileBuffer,
+                mimetype: mimeType,
+                fileName: caption || 'documento.pdf',
+                contextInfo: {
+                    externalAdReply: {
+                        title: 'Panel WhatsApp',
+                        body: 'Documento desde Administración',
+                        mediaType: 1
+                    }
+                }
+            };
+        } else if (mimeType.startsWith('video/')) {
+            messageContent = {
+                video: fileBuffer,
+                caption: caption || '',
+                mimetype: mimeType
+            };
+        } else if (mimeType.startsWith('audio/')) {
+            const cleanMime = (mimeType.split(';')[0] ?? '').trim();
+            let audioBuffer = fileBuffer;
+            let audioMime = mimeType;
+
+            if (isVoiceNote && cleanMime !== 'audio/ogg') {
+                try {
+                    audioBuffer = await this.transcodeToOggOpus(fileBuffer);
+                    audioMime = 'audio/ogg; codecs=opus';
+                } catch (error: any) {
+                    console.error(`[${deviceId}] Error convirtiendo nota de voz a OGG/Opus:`, error?.message || error);
+                    audioBuffer = fileBuffer;
+                    audioMime = mimeType;
+                }
+            }
+
+            messageContent = {
+                audio: audioBuffer,
+                mimetype: audioMime,
+                ptt: isVoiceNote // true = nota de voz, false = audio normal
+            };
+        } else {
+            throw new Error(`Tipo de archivo no soportado: ${mimeType}`);
+        }
+
+        this.rememberPanelSend(deviceId, chatId, { timestamp: Date.now() });
+        const result = await sock.sendMessage(chatId, messageContent);
+        const msgId = result?.key?.id as string | undefined;
+        if (msgId) this.rememberPanelSend(deviceId, chatId, { id: msgId, timestamp: Date.now() });
+        return result;
+    }
+
+    // ========== GROUP MANAGEMENT ==========
+
+    public async getGroups(deviceId: string) {
+        const sock = this.sessions.get(deviceId);
+        if (!sock) throw new Error('Device not connected');
+
+        try {
+            const groups = await sock.groupFetchAllParticipating();
+            return Object.values(groups).map((group: any) => ({
+                id: group.id,
+                name: group.subject,
+                participants: group.participants.length,
+                owner: group.owner,
+                creation: group.creation,
+                desc: group.desc,
+                announce: group.announce
+            }));
+        } catch (error) {
+            console.error('Error al obtener grupos:', error);
+            return [];
+        }
+    }
+
+    public async createGroup(deviceId: string, name: string, participants: string[]) {
+        const sock = this.sessions.get(deviceId);
+        if (!sock) throw new Error('Device not connected');
+
+        try {
+            const group = await sock.groupCreate(name, participants);
+            return group;
+        } catch (error: any) {
+            throw new Error(`Error al crear grupo: ${error.message}`);
+        }
+    }
+
+    public async getGroupMetadata(deviceId: string, groupId: string) {
+        const sock = this.sessions.get(deviceId);
+        if (!sock) throw new Error('Device not connected');
+
+        try {
+            const metadata = await sock.groupMetadata(groupId);
+            return metadata;
+        } catch (error: any) {
+            throw new Error(`Error al obtener metadata del grupo: ${error.message}`);
+        }
+    }
+
+    public async addParticipantsToGroup(deviceId: string, groupId: string, participants: string[]) {
+        const sock = this.sessions.get(deviceId);
+        if (!sock) throw new Error('Device not connected');
+
+        try {
+            const result = await sock.groupParticipantsUpdate(groupId, participants, 'add');
+            return result;
+        } catch (error: any) {
+            throw new Error(`Error al agregar participantes: ${error.message}`);
+        }
+    }
+
+    public async removeParticipantsFromGroup(deviceId: string, groupId: string, participants: string[]) {
+        const sock = this.sessions.get(deviceId);
+        if (!sock) throw new Error('Device not connected');
+
+        try {
+            const result = await sock.groupParticipantsUpdate(groupId, participants, 'remove');
+            return result;
+        } catch (error: any) {
+            throw new Error(`Error al eliminar participantes: ${error.message}`);
+        }
+    }
+
+    public async promoteParticipants(deviceId: string, groupId: string, participants: string[]) {
+        const sock = this.sessions.get(deviceId);
+        if (!sock) throw new Error('Device not connected');
+
+        try {
+            const result = await sock.groupParticipantsUpdate(groupId, participants, 'promote');
+            return result;
+        } catch (error: any) {
+            throw new Error(`Error al promover participantes: ${error.message}`);
+        }
+    }
+
+    public async demoteParticipants(deviceId: string, groupId: string, participants: string[]) {
+        const sock = this.sessions.get(deviceId);
+        if (!sock) throw new Error('Device not connected');
+
+        try {
+            const result = await sock.groupParticipantsUpdate(groupId, participants, 'demote');
+            return result;
+        } catch (error: any) {
+            throw new Error(`Error al degradar participantes: ${error.message}`);
+        }
+    }
+
+    public async updateGroupSubject(deviceId: string, groupId: string, subject: string) {
+        const sock = this.sessions.get(deviceId);
+        if (!sock) throw new Error('Device not connected');
+
+        try {
+            await sock.groupUpdateSubject(groupId, subject);
+            return { success: true };
+        } catch (error: any) {
+            throw new Error(`Error al actualizar nombre del grupo: ${error.message}`);
+        }
+    }
+
+    public async updateGroupDescription(deviceId: string, groupId: string, description: string) {
+        const sock = this.sessions.get(deviceId);
+        if (!sock) throw new Error('Device not connected');
+
+        try {
+            await sock.groupUpdateDescription(groupId, description);
+            return { success: true };
+        } catch (error: any) {
+            throw new Error(`Error al actualizar descripción del grupo: ${error.message}`);
+        }
+    }
+
+    public async leaveGroup(deviceId: string, groupId: string) {
+        const sock = this.sessions.get(deviceId);
+        if (!sock) throw new Error('Device not connected');
+
+        try {
+            await sock.groupLeave(groupId);
+            return { success: true };
+        } catch (error: any) {
+            throw new Error(`Error al salir del grupo: ${error.message}`);
+        }
+    }
+
+    // ========== CHAT MANAGEMENT ==========
+
+    public async getChats(deviceId: string) {
+        const sock = this.sessions.get(deviceId);
+        if (!sock) throw new Error('Device not connected');
+
+        try {
+            // Obtener store del dispositivo
+            const store = stores.get(deviceId);
+            if (!store) {
+                console.log(`[${deviceId}] Store no encontrado, devolviendo lista vacía`);
+                return [];
+            }
+
+            // Obtener todos los chats almacenados
+            const chats = Array.from(store.chats.values());
+            console.log(`[${deviceId}] Chats encontrados en store: ${chats.length}`);
+
+            return chats.map((chat: any) => {
+                // Buscar nombre del contacto si no está ya definido
+                const contactName = store.contacts.get(chat.id) || chat.name;
+                const displayName = contactName || chat.id.split('@')[0];
+                
+                return {
+                    id: chat.id,
+                    name: displayName,
+                    lastMessageTime: chat.conversationTimestamp || Date.now(),
+                    unreadCount: chat.unreadCount || 0,
+                    isGroup: chat.id.endsWith('@g.us')
+                };
+            }).sort((a: any, b: any) => b.lastMessageTime - a.lastMessageTime);
+        } catch (error) {
+            console.error('Error al obtener chats:', error);
+            return [];
+        }
+    }
+
+    // Marcar chat como leído
+    public markChatAsRead(deviceId: string, chatId: string) {
+        const store = stores.get(deviceId);
+        if (store) {
+            const chat = store.chats.get(chatId);
+            if (chat) {
+                const hadUnread = Number(chat.unreadCount || 0) > 0;
+                chat.unreadCount = 0;
+                store.chats.set(chatId, chat);
+                console.log(`[${deviceId}] Chat marcado como leído: ${chatId}`);
+                if (hadUnread) {
+                    this.io?.emit('device:unread:update', {
+                        deviceId,
+                        chatId,
+                        totalUnread: this.computeTotalUnread(deviceId)
+                    });
+                }
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // Eliminar chat (local y remoto)
+    public async deleteChat(deviceId: string, chatId: string) {
+        const sock = this.sessions.get(deviceId);
+        if (!sock) throw new Error('Device not connected');
+
+        try {
+            // 1. Eliminar de WhatsApp (limpiar historial)
+            // clear: solo limpia mensajes
+            // delete: elimina el chat de la lista
+            await sock.chatModify({ delete: true, lastMessages: [] }, chatId);
+
+            // 2. Eliminar del store local
+            const store = stores.get(deviceId);
+            if (store) {
+                store.chats.delete(chatId);
+                store.messages.delete(chatId);
+            }
+            
+            console.log(`[${deviceId}] Chat eliminado: ${chatId}`);
+            return true;
+        } catch (error) {
+            console.error(`[${deviceId}] Error eliminando chat:`, error);
+            // Intentar eliminar localmente aunque falle remoto
+            const store = stores.get(deviceId);
+            if (store) {
+                store.chats.delete(chatId);
+                store.messages.delete(chatId);
+            }
+            return true;
+        }
+    }
+
+    public async getChatMessages(deviceId: string, chatId: string, limit: number = 50) {
+        const sock = this.sessions.get(deviceId);
+        if (!sock) throw new Error('Device not connected');
+
+        // Marcar como leído automáticamente al obtener mensajes
+        this.markChatAsRead(deviceId, chatId);
+
+        try {
+            // Obtener store del dispositivo
+            const store = stores.get(deviceId);
+            if (!store) {
+                console.log(`[${deviceId}] Store no encontrado para mensajes`);
+                return [];
+            }
+
+            // Cargar mensajes del chat
+            const messages = store.messages.get(chatId) || [];
+            console.log(`[${deviceId}] Mensajes encontrados para ${chatId}: ${messages.length}`);
+
+            // Tomar los últimos 'limit' mensajes
+            const recentMessages = messages.slice(-limit);
+
+            return recentMessages.map((msg: any) => {
+                const locationMessage = msg.location
+                    ? msg.location
+                    : (msg.message as any)?.locationMessage || (msg.message as any)?.liveLocationMessage || null;
+
+                const location = locationMessage
+                    ? {
+                        latitude: Number(locationMessage.degreesLatitude ?? locationMessage.latitude),
+                        longitude: Number(locationMessage.degreesLongitude ?? locationMessage.longitude),
+                        name: locationMessage.name ?? null,
+                        address: locationMessage.address ?? null
+                    }
+                    : null;
+
+                return {
+                    id: msg.key?.id || msg.id,
+                    text: msg.text || msg.message?.conversation ||
+                        msg.message?.extendedTextMessage?.text ||
+                        (location ? null : (msg.media ? null : '[Media]')),
+                    fromMe: msg.fromMe ?? msg.key?.fromMe,
+                    timestamp: msg.timestamp || (msg.messageTimestamp ? Number(msg.messageTimestamp) * 1000 : Date.now()),
+                    source: msg.source || ((msg.fromMe ?? msg.key?.fromMe) ? 'phone' : 'contact'),
+                    media: msg.media || null,
+                    location
+                };
+            });
+        } catch (error) {
+            console.error('Error al obtener mensajes:', error);
+            return [];
+        }
+    }
+
+    public async stopDevice(deviceId: string) {
+        const sock = this.sessions.get(deviceId);
+        if (sock) {
+            this.clearConnectWatchdog(deviceId);
+            try {
+                await sock.logout();
+            } catch {}
+            this.sessions.delete(deviceId);
+            stores.delete(deviceId);
+            this.updateDevice(deviceId, { status: 'DISCONNECTED', qr: null });
+        }
+    }
+
+    // ========== DISCONNECT AND CLEAN ==========
+
+    public async disconnectAndClean(deviceId: string) {
+        console.log(`[${deviceId}] Desconectando y limpiando datos...`);
+
+        await this.stopDevice(deviceId);
+
+        const authRoot = dbPath('auth');
+        const authPath = dbPath('auth', deviceId);
+        if (fs.existsSync(authPath)) {
+            try {
+                fs.rmSync(authPath, { recursive: true, force: true });
+                console.log(`[${deviceId}] Carpeta de auth eliminada:`, authPath);
+            } catch (error) {
+                console.error(`[${deviceId}] Error al eliminar carpeta auth:`, error);
+            }
+        }
+        try {
+            fs.mkdirSync(authRoot, { recursive: true });
+            fs.mkdirSync(authPath, { recursive: true });
+        } catch (error) {
+            console.error(`[${deviceId}] Error al recrear carpeta auth:`, error);
+        }
+
+        // 3. Eliminar carpeta de storage/archivos
+        const storagePath = path.join(this.storageRoot, deviceId);
+        if (fs.existsSync(storagePath)) {
+            try {
+                fs.rmSync(storagePath, { recursive: true, force: true });
+                console.log(`[${deviceId}] Carpeta de storage eliminada:`, storagePath);
+            } catch (error) {
+                console.error(`[${deviceId}] Error al eliminar carpeta storage:`, error);
+            }
+        }
+
+        // 4. Actualizar estado del dispositivo
+        this.updateDevice(deviceId, {
+            status: 'DISCONNECTED',
+            qr: null,
+            phoneNumber: null
+        });
+
+        console.log(`[${deviceId}] Dispositivo desconectado y limpiado completamente`);
+
+        return { success: true, message: 'Dispositivo desconectado y datos eliminados' };
+    }
+
+    public async deleteDevice(deviceId: string) {
+        // Primero desconectar y limpiar
+        await this.disconnectAndClean(deviceId);
+
+        // Eliminar de la lista de dispositivos
+        this.devices = this.devices.filter(d => d.id !== deviceId);
+        this.saveDevices();
+
+        console.log(`[${deviceId}] Dispositivo eliminado completamente`);
+
+        return { success: true, message: 'Dispositivo eliminado' };
+    }
+
+    // ========== BÚSQUEDA DE MENSAJES ==========
+
+    public async searchMessages(deviceId: string, query: string, options?: {
+        chatId?: string;
+        limit?: number;
+        fromMe?: boolean;
+    }) {
+        const store = stores.get(deviceId);
+        if (!store) {
+            throw new Error('Dispositivo no tiene mensajes en memoria');
+        }
+
+        const results: any[] = [];
+        const searchQuery = query.toLowerCase().trim();
+        const limit = options?.limit || 50;
+
+        // Determinar en qué chats buscar
+        let chatIds: string[] = [];
+        if (options?.chatId) {
+            chatIds = [options.chatId];
+        } else {
+            // Buscar en todos los chats
+            chatIds = Array.from(store.messages.keys());
+        }
+
+        for (const chatId of chatIds) {
+            const messages = store.messages.get(chatId) || [];
+
+            for (const msg of messages) {
+                // Filtrar por fromMe si se especifica
+                const msgFromMe = msg.fromMe ?? msg.key?.fromMe;
+                if (options?.fromMe !== undefined && msgFromMe !== options.fromMe) {
+                    continue;
+                }
+
+                // Obtener texto del mensaje
+                const text = msg.text ||
+                    msg.message?.conversation ||
+                    msg.message?.extendedTextMessage?.text ||
+                    msg.message?.imageMessage?.caption ||
+                    msg.message?.videoMessage?.caption ||
+                    msg.message?.documentMessage?.caption ||
+                    '';
+
+                // Buscar en el texto
+                if (text && text.toLowerCase().includes(searchQuery)) {
+                    results.push({
+                        id: msg.key?.id || msg.id,
+                        chatId,
+                        chatName: chatId.split('@')[0],
+                        text,
+                        fromMe: msgFromMe,
+                        timestamp: msg.timestamp || (msg.messageTimestamp ? Number(msg.messageTimestamp) * 1000 : Date.now()),
+                        matchHighlight: this.highlightMatch(text, searchQuery)
+                    });
+
+                    // Limitar resultados
+                    if (results.length >= limit) {
+                        break;
+                    }
+                }
+            }
+
+            if (results.length >= limit) {
+                break;
+            }
+        }
+
+        // Ordenar por timestamp descendente (más recientes primero)
+        results.sort((a, b) => b.timestamp - a.timestamp);
+
+        console.log(`[${deviceId}] Búsqueda "${query}": ${results.length} resultados encontrados`);
+        return results;
+    }
+
+    private highlightMatch(text: string, query: string): string {
+        const regex = new RegExp(`(${query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
+        return text.replace(regex, '**$1**');
+    }
+}

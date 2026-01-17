@@ -1,0 +1,259 @@
+import React, { useState, useEffect } from 'react';
+import { Card, Badge, Avatar, List, Typography, Button } from 'antd';
+import { MessageSquare, Maximize2 } from 'lucide-react';
+import { useSocket } from '../hooks/useSocket';
+import { apiFetch } from '../lib/runtime';
+
+const { Text } = Typography;
+
+interface Device {
+    id: string;
+    name: string;
+    status: string;
+    phoneNumber?: string | null;
+    number?: string | null;
+}
+
+interface Chat {
+    id: string;
+    name: string;
+    lastMessageTime: number;
+    unreadCount: number;
+    isGroup: boolean;
+}
+
+interface BranchCardProps {
+    device: Device;
+    onOpenFull: () => void;
+    onRename?: (name: string) => void;
+    headerActions?: React.ReactNode;
+    onPin?: () => void;
+    isPinned?: boolean;
+    dragHandle?: React.ReactNode;
+}
+
+export const BranchCard: React.FC<BranchCardProps> = ({ device, onOpenFull, onRename, headerActions, onPin, isPinned, dragHandle }) => {
+    const socket = useSocket();
+    const [chats, setChats] = useState<Chat[]>([]);
+    const [totalUnread, setTotalUnread] = useState(0);
+
+    // Cargar chats
+    useEffect(() => {
+        const fetchChats = async () => {
+            if (device.status !== 'CONNECTED') return;
+            try {
+                const res = await apiFetch(`/api/devices/${device.id}/chats`);
+                const text = await res.text();
+                const data = text ? (() => { try { return JSON.parse(text); } catch { return null; } })() : null;
+                if (!res.ok) {
+                    setChats([]);
+                    setTotalUnread(0);
+                    return;
+                }
+                if (Array.isArray(data)) {
+                    setChats(data.slice(0, 5)); // Solo los 5 más recientes
+                    setTotalUnread(data.reduce((sum: number, c: Chat) => sum + (c.unreadCount || 0), 0));
+                }
+            } catch (error) {
+                console.error('Error:', error);
+            }
+        };
+        
+        fetchChats();
+        const interval = setInterval(fetchChats, 10000);
+        return () => clearInterval(interval);
+    }, [device.id, device.status]);
+
+    // Socket para mensajes nuevos
+    useEffect(() => {
+        if (!socket) return;
+        
+        const handleNewMessage = (data: any) => {
+            if (data.deviceId === device.id && !data.msg.fromMe) {
+                setTotalUnread(prev => prev + 1);
+            }
+        };
+
+        const handleUnreadUpdate = (data: any) => {
+            if (data.deviceId !== device.id) return;
+            if (typeof data.totalUnread === 'number') {
+                setTotalUnread(data.totalUnread);
+            }
+        };
+        
+        socket.on('message:new', handleNewMessage);
+        socket.on('device:unread:update', handleUnreadUpdate);
+        return () => { 
+            socket.off('message:new', handleNewMessage); 
+            socket.off('device:unread:update', handleUnreadUpdate);
+        };
+    }, [socket, device.id]);
+
+    const isConnected = device.status === 'CONNECTED';
+    const nameEditable = onRename
+        ? {
+            onChange: (value: string) => onRename(value),
+            triggerType: ['icon'] as ('text' | 'icon')[],
+            tooltip: 'Editar nombre',
+            maxLength: 60
+        }
+        : false;
+
+    return (
+        <Card
+            hoverable
+            onClick={onOpenFull}
+            style={{
+                background: '#111b21',
+                borderColor: isConnected ? '#00a884' : '#3b4a54',
+                borderWidth: isConnected ? 2 : 1,
+                cursor: 'pointer',
+                height: '100%',
+                display: 'flex',
+                flexDirection: 'column'
+            }}
+            styles={{ body: { padding: 0, flex: 1, display: 'flex', flexDirection: 'column' } }}
+        >
+            {/* Header */}
+            <div style={{
+                padding: '10px 12px',
+                background: isConnected ? '#00a884' : '#202c33',
+                borderBottom: '1px solid #222e35',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center'
+            }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <Badge status={isConnected ? 'success' : 'default'} />
+                    <div>
+                        <div onClick={(e) => e.stopPropagation()}>
+                            <Text strong style={{ color: '#fff', fontSize: 13 }} editable={nameEditable}>
+                                {device.name}
+                            </Text>
+                        </div>
+                        <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.7)' }}>
+                            {isConnected 
+                                ? (device.phoneNumber || device.number || 'Conectado')
+                                : device.status === 'QR_READY' ? 'Escanear QR' : 'Sin vincular'
+                            }
+                        </div>
+                    </div>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    {dragHandle}
+                    {onPin && (
+                        <Button
+                            type="text"
+                            size="small"
+                            onClick={(e) => {
+                                e.stopPropagation();
+                                onPin();
+                            }}
+                            icon={
+                                <div style={{ 
+                                    transform: isPinned ? 'rotate(45deg)' : 'rotate(0deg)', 
+                                    transition: 'transform 0.2s',
+                                    color: isConnected ? '#fff' : (isPinned ? '#00a884' : '#8696a0') 
+                                }}>
+                                    📌
+                                </div>
+                            }
+                            style={{ padding: 0, minWidth: 24 }}
+                            title={isPinned ? "Desfijar" : "Fijar al inicio"}
+                        />
+                    )}
+                    {isConnected && totalUnread > 0 && (
+                        <Badge
+                            count={totalUnread}
+                            size="small"
+                            style={{ backgroundColor: '#00a884', boxShadow: '0 0 0 1px #111b21' }}
+                        />
+                    )}
+                    <div onClick={(e) => e.stopPropagation()}>{headerActions}</div>
+                </div>
+            </div>
+
+            {/* Chats Preview */}
+            <div style={{ flex: 1, overflow: 'hidden' }}>
+                {!isConnected ? (
+                    <div style={{ 
+                        height: '100%', 
+                        display: 'flex', 
+                        alignItems: 'center', 
+                        justifyContent: 'center',
+                        color: '#8696a0',
+                        fontSize: 12,
+                        padding: 20,
+                        textAlign: 'center'
+                    }}>
+                        {device.status === 'QR_READY' 
+                            ? 'Haz clic para escanear QR'
+                            : 'Haz clic para conectar'
+                        }
+                    </div>
+                ) : chats.length === 0 ? (
+                    <div style={{ 
+                        height: '100%', 
+                        display: 'flex', 
+                        alignItems: 'center', 
+                        justifyContent: 'center',
+                        color: '#8696a0',
+                        fontSize: 12
+                    }}>
+                        Sin chats recientes
+                    </div>
+                ) : (
+                    <List
+                        size="small"
+                        dataSource={chats}
+                        renderItem={chat => (
+                            <List.Item style={{ 
+                                padding: '6px 10px', 
+                                borderBottom: '1px solid #222e35',
+                                background: 'transparent'
+                            }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%' }}>
+                                    <Avatar size="small" style={{ backgroundColor: chat.isGroup ? '#25D366' : '#6a7175', flexShrink: 0 }}>
+                                        {chat.name.substring(0, 1).toUpperCase()}
+                                    </Avatar>
+                                    <div style={{ flex: 1, overflow: 'hidden' }}>
+                                        <div style={{ 
+                                            fontSize: 11, 
+                                            color: '#e9edef',
+                                            overflow: 'hidden',
+                                            textOverflow: 'ellipsis',
+                                            whiteSpace: 'nowrap'
+                                        }}>
+                                            {chat.name}
+                                        </div>
+                                        <div style={{ fontSize: 9, color: '#8696a0' }}>
+                                            {new Date(chat.lastMessageTime).toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit' })}
+                                        </div>
+                                    </div>
+                                </div>
+                            </List.Item>
+                        )}
+                    />
+                )}
+            </div>
+
+            {/* Footer */}
+            <div style={{
+                padding: '8px 10px',
+                background: '#202c33',
+                borderTop: '1px solid #222e35',
+                display: 'flex',
+                justifyContent: 'center'
+            }}>
+                <Button 
+                    type="text" 
+                    size="small"
+                    icon={<Maximize2 size={14} />}
+                    style={{ color: '#00a884', fontSize: 11 }}
+                >
+                    Abrir completo
+                </Button>
+            </div>
+        </Card>
+    );
+};

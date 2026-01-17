@@ -1,0 +1,48 @@
+{
+  "name": "whatsapp-panel-desktop",
+  "private": true,
+  "version": "0.1.0",
+  "main": "main.cjs",
+  "scripts": {
+    "build:backend": "npm --prefix ../backend run build",
+    "build:frontend": "cross-env VITE_API_BASE=http://127.0.0.1:5000 VITE_SOCKET_URL=http://127.0.0.1:5000 npm --prefix ../frontend run build",
+    "copy:frontend": "node scripts/copy-frontend.mjs",
+    "sync:backend": "node scripts/sync-backend.mjs",
+    "build": "npm run build:backend && npm run sync:backend && npm run build:frontend && npm run copy:frontend && electron-builder --win --x64",
+    "start": "electron ."
+  },
+  "dependencies": {
+    "backend": "file:../backend"
+  },
+  "devDependencies": {
+    "cross-env": "^7.0.3",
+    "electron": "^30.5.1",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.whatsapppanel.app",
+    "productName": "WhatsApp Panel",
+    "directories": {
+      "output": "dist-win"
+    },
+    "files": [
+      "main.cjs",
+      "preload.cjs",
+      "renderer/**"
+    ],
+    "asar": true,
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowElevation": true,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
+  }
+}

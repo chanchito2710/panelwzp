@@ -1,0 +1,60 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+
+model Device {
+  id              String   @id @default(uuid())
+  name            String
+  number          String?
+  status          String   @default("DISCONNECTED") // CONNECTED, DISCONNECTED, QR_READY, CONNECTING
+  qr              String?
+  lastUpdate      DateTime @updatedAt
+  sessions        Message[]
+  chats           Chat[]
+}
+
+model Chat {
+  id              String   @id @default(uuid())
+  deviceId        String
+  device          Device   @relation(fields: [deviceId], references: [id])
+  waChatId        String   // WhatsApp JID
+  name            String?
+  unreadCount     Int      @default(0)
+  priorityScore   Int      @default(0)
+  lastMessageAt   DateTime @default(now())
+  messages        Message[]
+
+  @@unique([deviceId, waChatId])
+}
+
+model Message {
+  id              String   @id @default(uuid())
+  deviceId        String
+  device          Device   @relation(fields: [deviceId], references: [id])
+  chatId          String
+  chat            Chat     @relation(fields: [chatId], references: [id])
+  waMessageId     String   @unique
+  fromMe          Boolean
+  source          String   @default("whatsapp") // panel, whatsapp
+  type            String   @default("text") // text, audio, image, video, document
+  text            String?
+  mediaPath       String?
+  timestamp       DateTime @default(now())
+  status          String   @default("sent") // sent, delivered, read, failed
+  rawJson         String?
+}
+
+model RetentionPolicy {
+  id              String   @id @default("global")
+  daysMessages    Int      @default(30)
+  daysFiles       Int      @default(30)
+  enabled         Boolean  @default(true)
+}
