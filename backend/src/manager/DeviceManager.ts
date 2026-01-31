@@ -28,6 +28,7 @@ interface SimpleStore {
     messages: Map<string, any[]>;
     contacts: Map<string, string>; // jid -> nombre
     canonicalByKey: Map<string, string>;
+    canonicalByName: Map<string, string>;
     aliases: Map<string, string>;
     profilePhotos: Map<string, { url: string; updatedAt: number }>;
 }
@@ -40,6 +41,7 @@ function createSimpleStore(): SimpleStore {
         messages: new Map(),
         contacts: new Map(),
         canonicalByKey: new Map(),
+        canonicalByName: new Map(),
         aliases: new Map(),
         profilePhotos: new Map()
     };
@@ -57,10 +59,21 @@ function hasDeviceSuffix(chatId: string): boolean {
     return prefix.includes(':');
 }
 
+function isLid(chatId: string): boolean {
+    return String(chatId || '').endsWith('@lid');
+}
+
+function normalizeName(name: string): string {
+    return String(name || '').trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
 function preferredChatId(a: string, b: string): string {
     if (!a) return b;
     if (!b) return a;
     if (a.endsWith('@g.us') || b.endsWith('@g.us')) return a.endsWith('@g.us') ? a : b;
+    const aLid = isLid(a);
+    const bLid = isLid(b);
+    if (aLid !== bLid) return aLid ? b : a;
     const aHas = hasDeviceSuffix(a);
     const bHas = hasDeviceSuffix(b);
     if (aHas !== bHas) return aHas ? b : a;
@@ -69,6 +82,8 @@ function preferredChatId(a: string, b: string): string {
 
 function mergeChatData(store: SimpleStore, fromId: string, toId: string) {
     if (!fromId || !toId || fromId === toId) return;
+
+    store.aliases.set(fromId, toId);
 
     const fromChat = store.chats.get(fromId);
     const toChat = store.chats.get(toId);
@@ -102,6 +117,24 @@ function mergeChatData(store: SimpleStore, fromId: string, toId: string) {
     const toContact = store.contacts.get(toId);
     if (fromContact && !toContact) store.contacts.set(toId, fromContact);
     if (fromContact) store.contacts.delete(fromId);
+
+    const fromPhoto = store.profilePhotos.get(fromId);
+    const toPhoto = store.profilePhotos.get(toId);
+    if (fromPhoto && !toPhoto) store.profilePhotos.set(toId, fromPhoto);
+    if (fromPhoto) store.profilePhotos.delete(fromId);
+
+    for (const [k, v] of store.aliases.entries()) {
+        if (k === fromId) store.aliases.set(k, toId);
+        else if (v === fromId) store.aliases.set(k, toId);
+    }
+
+    for (const [k, v] of store.canonicalByKey.entries()) {
+        if (v === fromId) store.canonicalByKey.set(k, toId);
+    }
+
+    for (const [k, v] of store.canonicalByName.entries()) {
+        if (v === fromId) store.canonicalByName.set(k, toId);
+    }
 }
 
 function findRecentChatByName(store: SimpleStore, name: string, timestamp: number): string | null {
@@ -128,6 +161,37 @@ function findRecentChatByName(store: SimpleStore, name: string, timestamp: numbe
     candidates.sort((a, b) => b.ts - a.ts);
     if (candidates.length !== 1) return null;
     return candidates[0]!.id;
+}
+
+function resolveCanonicalChatIdByName(store: SimpleStore, chatId: string, contactName: string): string {
+    const normalized = normalizeName(contactName);
+    if (!normalized) return chatId;
+
+    const existing = store.canonicalByName.get(normalized);
+    if (existing) {
+        store.aliases.set(chatId, existing);
+        return existing;
+    }
+
+    const matches: string[] = [];
+    for (const chat of store.chats.values()) {
+        const id = String(chat?.id || '');
+        if (!id) continue;
+        if (id.endsWith('@g.us')) continue;
+        const chatName = normalizeName(store.contacts.get(id) || chat?.name || '');
+        if (chatName === normalized) matches.push(id);
+    }
+
+    if (!matches.length) {
+        store.canonicalByName.set(normalized, chatId);
+        return chatId;
+    }
+
+    let canonical = preferredChatId(chatId, matches[0]!);
+    for (const id of matches.slice(1)) canonical = preferredChatId(canonical, id);
+    store.canonicalByName.set(normalized, canonical);
+    store.aliases.set(chatId, canonical);
+    return canonical;
 }
 
 function resolveCanonicalChatId(store: SimpleStore | undefined, chatId: string): string {
@@ -789,6 +853,19 @@ export class DeviceManager {
                                        store.contacts.get(originalChatId) ||
                                        pushName;
 
+                    if (contactName && !unifiedChatId.endsWith('@g.us')) {
+                        const byName = resolveCanonicalChatIdByName(store, unifiedChatId, contactName);
+                        if (byName !== unifiedChatId) {
+                            store.canonicalByKey.set(chatKey, byName);
+                            store.aliases.set(unifiedChatId, byName);
+                            mergeChatData(store, unifiedChatId, byName);
+                            unifiedChatId = byName;
+                        }
+                        if (pushName && !msg.key.fromMe && unifiedChatId) {
+                            store.contacts.set(unifiedChatId, pushName);
+                        }
+                    }
+
                     // Determinar el nombre del chat
                     let chatName: string;
                     if (unifiedChatId.endsWith('@g.us')) {
@@ -1333,7 +1410,18 @@ export class DeviceManager {
             for (const chat of chats) {
                 const id = String(chat?.id || '');
                 if (!id) continue;
-                const canonical = resolveCanonicalChatId(store, id);
+                let canonical = resolveCanonicalChatId(store, id);
+                if (canonical !== id) mergeChatData(store, id, canonical);
+
+                const nameCandidate = store.contacts.get(canonical) || store.contacts.get(id) || String(chat?.name || '');
+                if (!canonical.endsWith('@g.us') && nameCandidate) {
+                    const byName = resolveCanonicalChatIdByName(store, canonical, nameCandidate);
+                    if (byName !== canonical) {
+                        mergeChatData(store, canonical, byName);
+                        canonical = byName;
+                    }
+                }
+
                 const entry = merged.get(canonical) || { ids: [], lastMessageTime: 0, unreadCount: 0, names: [] };
                 if (!entry.ids.includes(id)) entry.ids.push(id);
 
