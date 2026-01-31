@@ -27,6 +27,8 @@ interface SimpleStore {
     chats: Map<string, any>;
     messages: Map<string, any[]>;
     contacts: Map<string, string>; // jid -> nombre
+    canonicalByKey: Map<string, string>;
+    aliases: Map<string, string>;
 }
 
 const stores: Map<string, SimpleStore> = new Map();
@@ -35,7 +37,9 @@ function createSimpleStore(): SimpleStore {
     return {
         chats: new Map(),
         messages: new Map(),
-        contacts: new Map()
+        contacts: new Map(),
+        canonicalByKey: new Map(),
+        aliases: new Map()
     };
 }
 
@@ -98,18 +102,51 @@ function mergeChatData(store: SimpleStore, fromId: string, toId: string) {
     if (fromContact) store.contacts.delete(fromId);
 }
 
+function findRecentChatByName(store: SimpleStore, name: string, timestamp: number): string | null {
+    const normalized = String(name || '').trim();
+    if (!normalized) return null;
+
+    const maxAgeMs = 30 * 60 * 1000;
+    const candidates: Array<{ id: string; ts: number }> = [];
+
+    for (const chat of store.chats.values()) {
+        const id = String(chat?.id || '');
+        if (!id) continue;
+        if (id.endsWith('@g.us')) continue;
+        const chatName = String(store.contacts.get(id) || chat?.name || '').trim();
+        if (!chatName) continue;
+        if (chatName !== normalized) continue;
+
+        const ts = Number(chat?.conversationTimestamp || 0);
+        if (!Number.isFinite(ts) || ts <= 0) continue;
+        if (Math.abs(timestamp - ts) > maxAgeMs) continue;
+        candidates.push({ id, ts });
+    }
+
+    candidates.sort((a, b) => b.ts - a.ts);
+    if (candidates.length !== 1) return null;
+    return candidates[0]!.id;
+}
+
 function resolveCanonicalChatId(store: SimpleStore | undefined, chatId: string): string {
     if (!store || !chatId) return chatId;
-    if (store.chats.has(chatId)) return chatId;
+
+    const direct = store.aliases.get(chatId);
+    if (direct) return direct;
 
     const key = chatKeyOf(chatId);
     if (!key) return chatId;
+
+    const mapped = store.canonicalByKey.get(key);
+    if (mapped) return mapped;
 
     let best = chatId;
     for (const existingId of store.chats.keys()) {
         if (chatKeyOf(existingId) !== key) continue;
         best = preferredChatId(best, existingId);
     }
+    store.canonicalByKey.set(key, best);
+    store.aliases.set(chatId, best);
     return best;
 }
 
@@ -615,18 +652,28 @@ export class DeviceManager {
                 const store = stores.get(deviceId);
                 let unifiedChatId = chatId;
                 if (store) {
-                    for (const existingChatId of store.chats.keys()) {
-                        const existingKey = chatKeyOf(existingChatId);
-                        if (existingKey === chatKey && existingChatId !== chatId) {
-                            const preferred = preferredChatId(existingChatId, chatId);
-                            unifiedChatId = preferred;
-                            if (preferred === existingChatId) {
-                                mergeChatData(store, chatId, existingChatId);
-                            } else {
-                                mergeChatData(store, existingChatId, chatId);
-                            }
-                            break;
+                    const existingCanonical = store.canonicalByKey.get(chatKey);
+                    if (existingCanonical) {
+                        unifiedChatId = existingCanonical;
+                        store.aliases.set(chatId, unifiedChatId);
+                    } else {
+                        const byKey = resolveCanonicalChatId(store, chatId);
+                        unifiedChatId = byKey;
+                    }
+
+                    if (unifiedChatId === chatId && chatId.includes('@lid')) {
+                        const pushName = (msg as any).pushName;
+                        const ts = msg.messageTimestamp ? Number(msg.messageTimestamp) * 1000 : Date.now();
+                        const byName = findRecentChatByName(store, pushName, ts);
+                        if (byName) {
+                            unifiedChatId = byName;
+                            store.aliases.set(chatId, unifiedChatId);
+                            store.canonicalByKey.set(chatKey, unifiedChatId);
                         }
+                    }
+
+                    if (unifiedChatId !== chatId) {
+                        mergeChatData(store, chatId, unifiedChatId);
                     }
                 }
 
@@ -1171,8 +1218,8 @@ export class DeviceManager {
             for (const chat of chats) {
                 const id = String(chat?.id || '');
                 if (!id) continue;
-                const key = chatKeyOf(id);
-                const entry = merged.get(key) || { ids: [], lastMessageTime: 0, unreadCount: 0, names: [] };
+                const canonical = resolveCanonicalChatId(store, id);
+                const entry = merged.get(canonical) || { ids: [], lastMessageTime: 0, unreadCount: 0, names: [] };
                 if (!entry.ids.includes(id)) entry.ids.push(id);
 
                 const ts = Number(chat?.conversationTimestamp || 0);
@@ -1184,11 +1231,10 @@ export class DeviceManager {
                 const n = String(chat?.name || '').trim();
                 if (n) entry.names.push(n);
 
-                merged.set(key, entry);
+                merged.set(canonical, entry);
             }
 
-            const result = Array.from(merged.values()).map((entry) => {
-                const canonicalId = entry.ids.reduce((best, id) => preferredChatId(best, id), entry.ids[0] || '');
+            const result = Array.from(merged.entries()).map(([canonicalId, entry]) => {
                 const contactName =
                     store.contacts.get(canonicalId) ||
                     entry.ids.map((id) => store.contacts.get(id)).find(Boolean) ||
@@ -1217,16 +1263,17 @@ export class DeviceManager {
     public markChatAsRead(deviceId: string, chatId: string) {
         const store = stores.get(deviceId);
         if (store) {
-            const chat = store.chats.get(chatId);
+            const canonicalId = resolveCanonicalChatId(store, chatId);
+            const chat = store.chats.get(canonicalId);
             if (chat) {
                 const hadUnread = Number(chat.unreadCount || 0) > 0;
                 chat.unreadCount = 0;
-                store.chats.set(chatId, chat);
-                console.log(`[${deviceId}] Chat marcado como leído: ${chatId}`);
+                store.chats.set(canonicalId, chat);
+                console.log(`[${deviceId}] Chat marcado como leído: ${canonicalId}`);
                 if (hadUnread) {
                     this.io?.emit('device:unread:update', {
                         deviceId,
-                        chatId,
+                        chatId: canonicalId,
                         totalUnread: this.computeTotalUnread(deviceId)
                     });
                 }
@@ -1241,28 +1288,45 @@ export class DeviceManager {
         const sock = this.sessions.get(deviceId);
         if (!sock) throw new Error('Device not connected');
 
+        const store = stores.get(deviceId);
+        const canonicalId = store ? resolveCanonicalChatId(store, chatId) : chatId;
+
         try {
             // 1. Eliminar de WhatsApp (limpiar historial)
             // clear: solo limpia mensajes
             // delete: elimina el chat de la lista
-            await sock.chatModify({ delete: true, lastMessages: [] }, chatId);
+            await sock.chatModify({ delete: true, lastMessages: [] }, canonicalId);
 
             // 2. Eliminar del store local
-            const store = stores.get(deviceId);
             if (store) {
-                store.chats.delete(chatId);
-                store.messages.delete(chatId);
+                store.chats.delete(canonicalId);
+                store.messages.delete(canonicalId);
+                store.contacts.delete(canonicalId);
+
+                for (const [k, v] of store.aliases.entries()) {
+                    if (k === canonicalId || v === canonicalId) store.aliases.delete(k);
+                }
+                for (const [k, v] of store.canonicalByKey.entries()) {
+                    if (v === canonicalId) store.canonicalByKey.delete(k);
+                }
             }
             
-            console.log(`[${deviceId}] Chat eliminado: ${chatId}`);
+            console.log(`[${deviceId}] Chat eliminado: ${canonicalId}`);
             return true;
         } catch (error) {
             console.error(`[${deviceId}] Error eliminando chat:`, error);
             // Intentar eliminar localmente aunque falle remoto
-            const store = stores.get(deviceId);
             if (store) {
-                store.chats.delete(chatId);
-                store.messages.delete(chatId);
+                store.chats.delete(canonicalId);
+                store.messages.delete(canonicalId);
+                store.contacts.delete(canonicalId);
+
+                for (const [k, v] of store.aliases.entries()) {
+                    if (k === canonicalId || v === canonicalId) store.aliases.delete(k);
+                }
+                for (const [k, v] of store.canonicalByKey.entries()) {
+                    if (v === canonicalId) store.canonicalByKey.delete(k);
+                }
             }
             return true;
         }
@@ -1283,9 +1347,11 @@ export class DeviceManager {
                 return [];
             }
 
+            const canonicalId = resolveCanonicalChatId(store, chatId);
+
             // Cargar mensajes del chat
-            const messages = store.messages.get(chatId) || [];
-            console.log(`[${deviceId}] Mensajes encontrados para ${chatId}: ${messages.length}`);
+            const messages = store.messages.get(canonicalId) || [];
+            console.log(`[${deviceId}] Mensajes encontrados para ${canonicalId}: ${messages.length}`);
 
             // Tomar los últimos 'limit' mensajes
             const recentMessages = messages.slice(-limit);
