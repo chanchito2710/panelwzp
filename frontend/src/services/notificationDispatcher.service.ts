@@ -1,112 +1,134 @@
-import { getNotificationSettings } from './notificationSettings.service';
 import { playNotificationTone } from './notificationSound.service';
 import { isChatInFocus } from './notificationFocus.service';
-import { speakTts, isTtsSupported } from './tts.service';
+import { getBranchNotificationSettings } from './branchNotificationSettings.service';
+import { enqueueTts } from './notificationQueueManager.service';
+import { isTtsSupported } from './tts.service';
 
 type IncomingMessageEvent = {
-    deviceId: string;
+    branchId: string;
+    branchName: string;
     chatId: string;
     fromMe: boolean;
     msgId?: string | null;
     timestamp?: number;
-    contactName?: string | null;
+    senderName?: string | null;
 };
 
 const playedByMsg = new Map<string, number>();
 
-type SpeakState = { lastAt: number; pending: number; timer: number | null; lastName: string };
+type SpeakState = { lastAt: number; pending: number; timer: number | null; lastName: string; lastChatId: string };
 const speakByContact = new Map<string, SpeakState>();
 
 const normalizeName = (name: string) => String(name || '').trim();
 
-const getFallbackName = (chatId: string, mode: 'unknown' | 'number') => {
-    if (mode === 'number') return chatId.split('@')[0] || chatId;
+const contactKeyOf = (chatId: string) => {
+    if (!chatId) return '';
+    if (chatId.includes('@g.us')) return chatId;
+    const prefix = chatId.split('@')[0] || chatId;
+    return prefix.split(':')[0] || prefix;
+};
+
+const getFallbackName = (chatId: string, readNumber: boolean) => {
+    if (readNumber) return chatId.split('@')[0] || chatId;
     return 'Número desconocido';
 };
 
-const debug = (s: ReturnType<typeof getNotificationSettings>, msg: string) => {
-    if (!s.debugLogs) return;
+const debug = (branchId: string, enabled: boolean, msg: string) => {
+    if (!enabled) return;
     try { console.log(msg); } catch {}
 };
 
 export const notifyIncomingMessage = (evt: IncomingMessageEvent) => {
-    const s = getNotificationSettings();
-
-    if (s.silentMode) {
-        debug(s, '[notif] suprimido: silentMode');
-        return;
-    }
-
     if (evt.fromMe) return;
 
-    const deviceId = String(evt.deviceId || '');
+    const branchId = String(evt.branchId || '');
+    const branchName = String(evt.branchName || '').trim();
     const chatId = String(evt.chatId || '');
-    if (!deviceId || !chatId) return;
+    if (!branchId || !chatId) return;
 
     const msgId = String(evt.msgId || '');
-    const msgKey = msgId ? `${deviceId}:${chatId}:${msgId}` : `${deviceId}:${chatId}:${String(evt.timestamp || '')}`;
+    const msgKey = msgId ? `${branchId}:${chatId}:${msgId}` : `${branchId}:${chatId}:${String(evt.timestamp || '')}`;
     const now = Date.now();
     const lastPlayed = playedByMsg.get(msgKey) || 0;
     if (msgKey && now - lastPlayed < 1000) return;
     if (msgKey) playedByMsg.set(msgKey, now);
 
-    const focused = isChatInFocus(chatId);
-    debug(s, `[notif] nuevo mensaje: device=${deviceId} chat=${chatId} focus=${focused}`);
+    const s = getBranchNotificationSettings(branchId);
+    debug(branchId, s.debugLogs, `[branchId=${branchId}] settings loaded`);
+
+    const focused = isChatInFocus(branchId, chatId);
+    debug(branchId, s.debugLogs, `[branchId=${branchId}] nuevo mensaje: chat=${chatId} focus=${focused}`);
 
     if (s.toneEnabled) {
         if (!focused || s.playToneWhileChatOpen) {
             playNotificationTone({ toneId: s.toneId, volume: s.toneVolume });
-            debug(s, `[notif] tono reproducido: id=${s.toneId} vol=${s.toneVolume}`);
+            debug(branchId, s.debugLogs, `[branchId=${branchId}] tone played`);
         } else {
-            debug(s, '[notif] tono suprimido: chat en foco');
+            debug(branchId, s.debugLogs, `[branchId=${branchId}] tone suppressed (focus)`);
         }
     }
 
     if (!s.ttsEnabled) return;
     if (!isTtsSupported()) return;
+    if (focused) {
+        debug(branchId, s.debugLogs, `[branchId=${branchId}] voice suppressed (focus)`);
+        return;
+    }
 
-    const contactKey = `${deviceId}:${chatId}`;
-    const state = speakByContact.get(contactKey) || { lastAt: 0, pending: 0, timer: null, lastName: '' };
-    const nameRaw = normalizeName(String(evt.contactName || ''));
-    const name = nameRaw || getFallbackName(chatId, s.ttsUnknownNameMode);
+    const contactKey = `${branchId}:${contactKeyOf(chatId)}`;
+    const state = speakByContact.get(contactKey) || { lastAt: 0, pending: 0, timer: null, lastName: '', lastChatId: chatId };
+    const nameRaw = normalizeName(String(evt.senderName || ''));
+    const name = nameRaw || getFallbackName(chatId, s.ttsReadNumberWhenUnknown);
     state.lastName = name;
+    state.lastChatId = chatId;
     state.pending += 1;
 
-    const cooldownMs = 10000;
-    const canSpeakNow = now - state.lastAt >= cooldownMs;
+    const schedule = (delayMs: number) => {
+        if (state.timer != null) return;
+        if (delayMs === 5000) debug(branchId, s.debugLogs, `[branchId=${branchId}] voice scheduled (5000ms)`);
+        state.timer = window.setTimeout(() => {
+            const st = speakByContact.get(contactKey);
+            if (!st) return;
+            const count = Math.max(1, st.pending);
+            const now2 = Date.now();
+            const cooldownMs = 10000;
+            const wait = Math.max(0, cooldownMs - (now2 - st.lastAt));
+            if (wait > 0) {
+                st.timer = null;
+                speakByContact.set(contactKey, st);
+                schedule(wait + 20);
+                return;
+            }
 
-    const speak = (count: number) => {
-        const text = count > 1 ? `${count} mensajes de ${name}` : (s.ttsFormat === 'name' ? name : `Mensaje de ${name}`);
-        speakTts(text, {
-            voiceURI: s.ttsVoiceURI || undefined,
-            lang: s.ttsLang === 'auto' ? null : s.ttsLang,
-            rate: s.ttsRate,
-            pitch: s.ttsPitch,
-            volume: 1
-        });
-        debug(s, `[notif] TTS: ${text}`);
-        state.lastAt = Date.now();
-        state.pending = 0;
-        state.timer = null;
-        speakByContact.set(contactKey, state);
+            if (isChatInFocus(branchId, st.lastChatId)) {
+                st.pending = 0;
+                st.timer = null;
+                speakByContact.set(contactKey, st);
+                debug(branchId, s.debugLogs, `[branchId=${branchId}] voice suppressed (focus)`);
+                return;
+            }
+
+            const branchPrefix = branchName || branchId;
+            const phrase = count > 1 ? 'mensajes de' : 'mensaje de';
+            const text = `${branchPrefix}, ${phrase} ${st.lastName}`;
+            enqueueTts({
+                text,
+                voiceURI: s.ttsVoiceURI,
+                lang: s.ttsLang === 'auto' ? null : s.ttsLang,
+                rate: s.ttsRate,
+                pitch: s.ttsPitch
+            });
+
+            debug(branchId, s.debugLogs, `[branchId=${branchId}] speaking: "${text}"`);
+            if (count > 1) debug(branchId, s.debugLogs, `[branchId=${branchId}] grouped messages: ${count}`);
+
+            st.lastAt = Date.now();
+            st.pending = 0;
+            st.timer = null;
+            speakByContact.set(contactKey, st);
+        }, delayMs);
     };
 
-    if (canSpeakNow && state.pending === 1 && state.timer == null) {
-        speak(1);
-        return;
-    }
-
-    if (state.timer != null) {
-        speakByContact.set(contactKey, state);
-        return;
-    }
-
-    state.timer = window.setTimeout(() => {
-        const st = speakByContact.get(contactKey);
-        if (!st) return;
-        const count = Math.max(1, st.pending);
-        speak(count);
-    }, 1500);
     speakByContact.set(contactKey, state);
+    schedule(5000);
 };
-

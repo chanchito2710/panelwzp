@@ -5,9 +5,9 @@ import QRCode from 'react-qr-code';
 import { useSocket } from '../hooks/useSocket';
 import { apiFetch, assetUrl } from '../lib/runtime';
 import { PairingCodeModal } from './PairingCodeModal';
-import { AppSettingsModal } from './AppSettingsModal';
-import { notifyIncomingMessage } from '../services/notificationDispatcher.service';
-import { setActiveChatId, setChatOpen } from '../services/notificationFocus.service';
+import { BranchNotificationsModal } from './BranchNotificationsModal';
+import { setActiveBranchId, setActiveChatId, setChatOpen } from '../services/notificationFocus.service';
+import { upsertBranchChats } from '../services/branchChatDirectory.service';
 
 const { Sider, Content } = Layout;
 const { Text } = Typography;
@@ -132,6 +132,10 @@ export const ChatInterface = ({ device, onClose }: { device: Device; onClose?: (
     }, []);
 
     useEffect(() => {
+        setActiveBranchId(device.id);
+    }, [device.id]);
+
+    useEffect(() => {
         setActiveChatId(activeChat);
     }, [activeChat]);
 
@@ -159,6 +163,7 @@ export const ChatInterface = ({ device, onClose }: { device: Device; onClose?: (
                 const data = await res.json();
                 // Solo actualizar si es un array válido
                 if (Array.isArray(data)) {
+                    upsertBranchChats(device.id, data);
                     setChats(data);
                 } else {
                     console.log('Respuesta no es un array:', data);
@@ -401,18 +406,6 @@ export const ChatInterface = ({ device, onClose }: { device: Device; onClose?: (
         socket.on('message:new', (data: { deviceId: string, chatId: string, msg: Message }) => {
             if (data.deviceId === device.id) {
                 console.log('Mensaje nuevo recibido:', data);
-                if (!data.msg.fromMe) {
-                    const incomingKey = getChatKey(data.chatId);
-                    const existingName = chatsRef.current.find(c => getChatKey(c.id) === incomingKey)?.name || null;
-                    notifyIncomingMessage({
-                        deviceId: String(data.deviceId),
-                        chatId: String(data.chatId),
-                        fromMe: false,
-                        msgId: data.msg?.id ? String(data.msg.id) : null,
-                        timestamp: typeof data.msg?.timestamp === 'number' ? data.msg.timestamp : undefined,
-                        contactName: existingName
-                    });
-                }
 
                 const incomingKey = getChatKey(data.chatId);
                 const activeKey = getChatKey(activeChat);
@@ -796,10 +789,11 @@ export const ChatInterface = ({ device, onClose }: { device: Device; onClose?: (
         }
     };
 
-    // Contenido del Modal de Configuración
     const settingsModalContent = (
-        <AppSettingsModal
+        <BranchNotificationsModal
             open={showSettingsModal}
+            branchId={device.id}
+            branchName={device.name}
             onClose={() => setShowSettingsModal(false)}
         />
     );

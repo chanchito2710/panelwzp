@@ -3,7 +3,7 @@ import { Card, Badge, Avatar, List, Typography, Button } from 'antd';
 import { MessageSquare, Maximize2 } from 'lucide-react';
 import { useSocket } from '../hooks/useSocket';
 import { apiFetch, assetUrl } from '../lib/runtime';
-import { notifyIncomingMessage } from '../services/notificationDispatcher.service';
+import { upsertBranchChats } from '../services/branchChatDirectory.service';
 
 const { Text } = Typography;
 
@@ -57,6 +57,7 @@ export const BranchCard: React.FC<BranchCardProps> = ({ device, onOpenFull, onRe
                     return;
                 }
                 if (Array.isArray(data)) {
+                    upsertBranchChats(device.id, data);
                     setChats(data.slice(0, 5)); // Solo los 5 más recientes
                     setTotalUnread(data.reduce((sum: number, c: Chat) => sum + (c.unreadCount || 0), 0));
                 }
@@ -76,15 +77,6 @@ export const BranchCard: React.FC<BranchCardProps> = ({ device, onOpenFull, onRe
         
         const handleNewMessage = (data: any) => {
             if (data.deviceId === device.id && !data.msg.fromMe) {
-                const chatName = chatsRef.current.find(c => c.id === data.chatId)?.name || null;
-                notifyIncomingMessage({
-                    deviceId: String(data.deviceId),
-                    chatId: String(data.chatId),
-                    fromMe: Boolean(data?.msg?.fromMe),
-                    msgId: data?.msg?.id ? String(data.msg.id) : null,
-                    timestamp: typeof data?.msg?.timestamp === 'number' ? data.msg.timestamp : undefined,
-                    contactName: chatName
-                });
                 setTotalUnread(prev => prev + 1);
             }
         };

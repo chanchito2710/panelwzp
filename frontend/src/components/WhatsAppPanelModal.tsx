@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Modal, Button, Badge, Space, Tabs, Popconfirm, message, Typography } from 'antd';
-import { Plus, Smartphone, MessageSquare, Files, FileText, BarChart3, Trash2, ArrowLeft, X, Settings } from 'lucide-react';
+import { Plus, Smartphone, MessageSquare, Files, FileText, BarChart3, Trash2, ArrowLeft, X, Settings, Lock } from 'lucide-react';
 import { ChatInterface } from './ChatInterface';
 import { BranchCard } from './BranchCard';
 import { FilePanel } from './FilePanel';
@@ -8,7 +8,11 @@ import { TemplatesPanel } from './TemplatesPanel';
 import { StatsPanel } from './StatsPanel';
 import { apiFetch } from '../lib/runtime';
 import { PairingCodeModal } from './PairingCodeModal';
-import { AppSettingsModal } from './AppSettingsModal';
+import { BranchNotificationsModal } from './BranchNotificationsModal';
+import { GlobalSecurityModal } from './GlobalSecurityModal';
+import { useSocket } from '../hooks/useSocket';
+import { notifyIncomingMessage } from '../services/notificationDispatcher.service';
+import { getBranchChatName } from '../services/branchChatDirectory.service';
 import './WhatsAppPanelModal.retro.css';
 
 interface Device {
@@ -24,9 +28,11 @@ interface Device {
 const { Text } = Typography;
 
 export const WhatsAppPanelModal = ({ visible, onClose }: { visible: boolean, onClose: () => void }) => {
+    const socket = useSocket();
     const [devices, setDevices] = useState<Device[]>([]);
     const [currentDeviceIndex, setCurrentDeviceIndex] = useState<number | null>(null); // null = ningún dispositivo seleccionado
-    const [showAppSettings, setShowAppSettings] = useState(false);
+    const [showBranchNotifications, setShowBranchNotifications] = useState(false);
+    const [showGlobalSecurity, setShowGlobalSecurity] = useState(false);
     const [pinnedDevices, setPinnedDevices] = useState<string[]>(() => {
         const saved = localStorage.getItem('pinnedDevices');
         const parsed = saved ? JSON.parse(saved) : [];
@@ -41,6 +47,41 @@ export const WhatsAppPanelModal = ({ visible, onClose }: { visible: boolean, onC
     const [armedDragDeviceId, setArmedDragDeviceId] = useState<string | null>(null);
     const [pairingDeviceId, setPairingDeviceId] = useState<string | null>(null);
     const [messageApi, contextHolder] = message.useMessage();
+    const devicesRef = useRef<Device[]>([]);
+
+    useEffect(() => {
+        devicesRef.current = devices;
+    }, [devices]);
+
+    useEffect(() => {
+        if (!socket) return;
+        if (!visible) return;
+
+        const handleNewMessage = (data: any) => {
+            const branchId = String(data?.deviceId || '');
+            const chatId = String(data?.chatId || '');
+            const fromMe = Boolean(data?.msg?.fromMe);
+            if (!branchId || !chatId) return;
+            if (fromMe) return;
+            const branchName = devicesRef.current.find(d => d.id === branchId)?.name || branchId;
+            const senderName = getBranchChatName(branchId, chatId);
+
+            notifyIncomingMessage({
+                branchId,
+                branchName,
+                chatId,
+                fromMe: false,
+                msgId: data?.msg?.id ? String(data.msg.id) : null,
+                timestamp: typeof data?.msg?.timestamp === 'number' ? data.msg.timestamp : undefined,
+                senderName
+            });
+        };
+
+        socket.on('message:new', handleNewMessage);
+        return () => {
+            socket.off('message:new', handleNewMessage);
+        };
+    }, [socket, visible]);
 
     useEffect(() => {
         localStorage.removeItem('sortMode');
@@ -376,15 +417,20 @@ export const WhatsAppPanelModal = ({ visible, onClose }: { visible: boolean, onC
                                 <Button
                                     type="text"
                                     icon={<Settings size={18} />}
-                                    onClick={() => setShowAppSettings(true)}
+                                    onClick={() => setShowBranchNotifications(true)}
                                     style={{ color: '#8696a0' }}
-                                    title="Configuración"
+                                    title="Notificaciones"
                                 />
                             )
                         }}
                         items={tabItems}
                     />
-                    <AppSettingsModal open={showAppSettings} onClose={() => setShowAppSettings(false)} />
+                    <BranchNotificationsModal
+                        open={showBranchNotifications}
+                        branchId={currentDevice.id}
+                        branchName={currentDevice.name}
+                        onClose={() => setShowBranchNotifications(false)}
+                    />
                 </div>
             </Modal>
             </>
@@ -412,9 +458,14 @@ export const WhatsAppPanelModal = ({ visible, onClose }: { visible: boolean, onC
                         <span style={{ color: '#8696a0', fontSize: 12, marginLeft: 60 }}>Conectadas</span>
                         <Badge count={connectedCount} style={{ backgroundColor: '#00a884' }} />
                     </Space>
-                    <Button type="primary" icon={<Plus size={16} />} onClick={addDevice}>
-                        Agregar
-                    </Button>
+                    <Space>
+                        <Button icon={<Lock size={16} />} onClick={() => setShowGlobalSecurity(true)}>
+                            Seguridad
+                        </Button>
+                        <Button type="primary" icon={<Plus size={16} />} onClick={addDevice}>
+                            Agregar
+                        </Button>
+                    </Space>
                 </div>
             }
         >
@@ -526,6 +577,7 @@ export const WhatsAppPanelModal = ({ visible, onClose }: { visible: boolean, onC
                 deviceId={pairingDeviceId || ''}
                 onClose={() => setPairingDeviceId(null)}
             />
+            <GlobalSecurityModal open={showGlobalSecurity} onClose={() => setShowGlobalSecurity(false)} />
         </Modal>
         </>
     );
