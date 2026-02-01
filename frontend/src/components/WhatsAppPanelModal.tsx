@@ -49,7 +49,6 @@ export const WhatsAppPanelModal = ({ visible, onClose }: { visible: boolean, onC
     const [pairingDeviceId, setPairingDeviceId] = useState<string | null>(null);
     const [messageApi, contextHolder] = message.useMessage();
     const devicesRef = useRef<Device[]>([]);
-    const [activeChatId, setActiveChatId] = useState<string | null>(null);
     const [chatRefreshToken, setChatRefreshToken] = useState(0);
 
     useEffect(() => {
@@ -342,7 +341,6 @@ export const WhatsAppPanelModal = ({ visible, onClose }: { visible: boolean, onC
                         <ChatInterface
                             device={currentDevice}
                             onClose={() => setCurrentDeviceIndex(null)}
-                            onActiveChatChange={(chatId) => setActiveChatId(chatId)}
                             refreshToken={chatRefreshToken}
                         />
                     </div>
@@ -382,14 +380,13 @@ export const WhatsAppPanelModal = ({ visible, onClose }: { visible: boolean, onC
                     <div style={{ height: 'calc(85vh - 110px)', overflow: 'auto' }}>
                         <ImportMessagesPanel
                             deviceId={currentDevice.id}
-                            activeChatId={activeChatId}
                             onImported={() => setChatRefreshToken((v) => v + 1)}
                         />
                     </div>
                 )
             }
         ];
-    }, [currentDevice?.id, activeChatId, chatRefreshToken]); // Solo recrear tabs si cambia el ID del dispositivo (no sus props cambiantes como batería)
+    }, [currentDevice?.id, chatRefreshToken]); // Solo recrear tabs si cambia el ID del dispositivo (no sus props cambiantes como batería)
 
     if (currentDeviceIndex !== null && currentDevice) {
         return (

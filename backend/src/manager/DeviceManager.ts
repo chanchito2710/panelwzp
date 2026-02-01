@@ -250,6 +250,11 @@ export class DeviceManager {
     private pairingCodeLastAt: Map<string, number> = new Map();
     private avatarFetchInFlight: Map<string, Set<string>> = new Map();
     private avatarFetchLastAt: Map<string, number> = new Map();
+    private forceFullHistorySync: Set<string> = new Set();
+    private importInProgress: Set<string> = new Set();
+    private lastHistorySetAt: Map<string, number> = new Map();
+    private historySyncProgress: Map<string, number | null> = new Map();
+    private historySyncIsLatest: Map<string, boolean> = new Map();
 
     private constructor() {
         ensureDir(DB_ROOT);
@@ -745,74 +750,183 @@ export class DeviceManager {
         if (!store) throw Object.assign(new Error('Store no encontrado'), { status: 500 });
 
         const canonicalId = resolveCanonicalChatId(store, chatId);
-        const existing = store.messages.get(canonicalId) || [];
-        if (existing.length > 0) throw Object.assign(new Error('El chat no está vacío'), { status: 409 });
-
-        const before = existing.length;
-
-        const waitForMessages = async (timeoutMs: number) => {
-            const start = Date.now();
-            while (Date.now() - start < timeoutMs) {
-                const cur = store.messages.get(canonicalId) || [];
-                if (cur.length > 0) return cur.length;
-                await new Promise((r) => setTimeout(r, 300));
+        const lockKey = `${deviceId}:${canonicalId}`;
+        if (this.importInProgress.has(lockKey)) throw Object.assign(new Error('Importación en curso'), { status: 409 });
+        this.importInProgress.add(lockKey);
+        try {
+            const existing = store.messages.get(canonicalId) || [];
+            if (existing.length > 0) {
+                throw Object.assign(new Error('El chat no está vacío'), { status: 409 });
             }
-            return 0;
-        };
 
-        const waitForGrowth = async (prevLen: number, timeoutMs: number) => {
-            const start = Date.now();
-            while (Date.now() - start < timeoutMs) {
-                const cur = store.messages.get(canonicalId) || [];
-                if (cur.length > prevLen) return cur.length;
-                await new Promise((r) => setTimeout(r, 300));
+            const before = existing.length;
+
+            const waitForMessages = async (timeoutMs: number) => {
+                const start = Date.now();
+                while (Date.now() - start < timeoutMs) {
+                    const cur = store.messages.get(canonicalId) || [];
+                    if (cur.length > 0) return cur.length;
+                    await new Promise((r) => setTimeout(r, 300));
+                }
+                return 0;
+            };
+
+            const waitForGrowth = async (prevLen: number, timeoutMs: number) => {
+                const start = Date.now();
+                while (Date.now() - start < timeoutMs) {
+                    const cur = store.messages.get(canonicalId) || [];
+                    if (cur.length > prevLen) return cur.length;
+                    await new Promise((r) => setTimeout(r, 300));
+                }
+                return store.messages.get(canonicalId)?.length || prevLen;
+            };
+
+            const tryForceReconnect = async () => {
+                this.forceFullHistorySync.add(deviceId);
+                try {
+                    if (typeof sock?.end === 'function') sock.end(new Error('FORCE_FULL_SYNC'));
+                    else if (sock?.ws?.close) sock.ws.close();
+                } catch {}
+                const start = Date.now();
+                while (Date.now() - start < 30000) {
+                    const cur = store.messages.get(canonicalId) || [];
+                    if (cur.length > 0) return cur.length;
+                    await new Promise((r) => setTimeout(r, 400));
+                }
+                return store.messages.get(canonicalId)?.length || 0;
+            };
+
+            await waitForMessages(2000);
+
+            let currentLen = store.messages.get(canonicalId)?.length || 0;
+            if (currentLen === 0) {
+                try {
+                    await sock.fetchMessageHistory(
+                        50,
+                        { remoteJid: canonicalId, fromMe: false, id: '0' } as any,
+                        0 as any
+                    );
+                } catch (e: any) {
+                    const after0 = store.messages.get(canonicalId)?.length || 0;
+                    const success = after0 > 0;
+                    return { success, chatId: canonicalId, imported: Math.max(0, after0 - before), error: String(e?.message || 'No se pudo solicitar historial') };
+                }
+                currentLen = await waitForGrowth(0, 8000);
             }
-            return store.messages.get(canonicalId)?.length || prevLen;
-        };
 
-        await waitForMessages(2000);
-
-        let currentLen = store.messages.get(canonicalId)?.length || 0;
-        if (currentLen === 0) {
-            try {
-                await sock.fetchMessageHistory(
-                    50,
-                    { remoteJid: canonicalId, fromMe: false, id: '0' } as any,
-                    0 as any
-                );
-            } catch (e: any) {
-                const after0 = store.messages.get(canonicalId)?.length || 0;
-                return { success: after0 > 0, chatId: canonicalId, imported: Math.max(0, after0 - before), error: String(e?.message || 'No se pudo solicitar historial') };
+            if (currentLen === 0) {
+                currentLen = await tryForceReconnect();
             }
-            currentLen = await waitForGrowth(0, 8000);
+
+            const maxPages = 30;
+            for (let page = 0; page < maxPages; page++) {
+                const arr = store.messages.get(canonicalId) || [];
+                if (!arr.length) break;
+                arr.sort((a: any, b: any) => Number(a?.timestamp || 0) - Number(b?.timestamp || 0));
+                const oldest = arr[0];
+                const oldestKey = oldest?.key;
+                if (!oldestKey?.id || !oldestKey?.remoteJid) break;
+                const oldestTs =
+                    oldest?.messageTimestamp != null
+                        ? Number(oldest.messageTimestamp)
+                        : oldest?.timestamp
+                          ? Math.floor(Number(oldest.timestamp) / 1000)
+                          : 0;
+                const beforeLen = arr.length;
+                try {
+                    await sock.fetchMessageHistory(50, oldestKey as any, oldestTs as any);
+                } catch {
+                    break;
+                }
+                const afterLen = await waitForGrowth(beforeLen, 8000);
+                if (afterLen <= beforeLen) break;
+            }
+
+            const finalLen = store.messages.get(canonicalId)?.length || 0;
+            return { success: finalLen > 0, chatId: canonicalId, imported: Math.max(0, finalLen - before) };
+        } finally {
+            this.importInProgress.delete(lockKey);
         }
+    }
 
-        const maxPages = 30;
-        for (let page = 0; page < maxPages; page++) {
-            const arr = store.messages.get(canonicalId) || [];
-            if (!arr.length) break;
-            arr.sort((a: any, b: any) => Number(a?.timestamp || 0) - Number(b?.timestamp || 0));
-            const oldest = arr[0];
-            const oldestKey = oldest?.key;
-            if (!oldestKey?.id || !oldestKey?.remoteJid) break;
-            const oldestTs =
-                oldest?.messageTimestamp != null
-                    ? Number(oldest.messageTimestamp)
-                    : oldest?.timestamp
-                      ? Math.floor(Number(oldest.timestamp) / 1000)
-                      : 0;
-            const beforeLen = arr.length;
-            try {
-                await sock.fetchMessageHistory(50, oldestKey as any, oldestTs as any);
-            } catch {
-                break;
-            }
-            const afterLen = await waitForGrowth(beforeLen, 8000);
-            if (afterLen <= beforeLen) break;
+    public getMessageSummary(deviceId: string) {
+        const store = stores.get(deviceId);
+        if (!store) return { totalMessages: 0, chatsWithMessages: 0 };
+        let totalMessages = 0;
+        let chatsWithMessages = 0;
+        for (const msgs of store.messages.values()) {
+            const len = Array.isArray(msgs) ? msgs.length : 0;
+            totalMessages += len;
+            if (len > 0) chatsWithMessages += 1;
         }
+        return { totalMessages, chatsWithMessages };
+    }
 
-        const finalLen = store.messages.get(canonicalId)?.length || 0;
-        return { success: finalLen > 0, chatId: canonicalId, imported: Math.max(0, finalLen - before) };
+    public async importDeviceMessagesFromDevice(deviceId: string) {
+        const sock = this.sessions.get(deviceId);
+        if (!sock) throw Object.assign(new Error('Device not connected'), { status: 400 });
+
+        const store = stores.get(deviceId);
+        if (!store) throw Object.assign(new Error('Store no encontrado'), { status: 500 });
+
+        const lockKey = `${deviceId}:ALL`;
+        if (this.importInProgress.has(lockKey)) throw Object.assign(new Error('Importación en curso'), { status: 409 });
+        this.importInProgress.add(lockKey);
+        try {
+            const summary = this.getMessageSummary(deviceId);
+            if (summary.totalMessages > 0) throw Object.assign(new Error('El dispositivo ya tiene mensajes importados'), { status: 409 });
+
+            const previousHistoryAt = this.lastHistorySetAt.get(deviceId) || 0;
+            this.historySyncIsLatest.set(deviceId, false);
+            this.historySyncProgress.set(deviceId, null);
+
+            this.forceFullHistorySync.add(deviceId);
+            try {
+                if (typeof sock?.end === 'function') sock.end(new Error('FORCE_FULL_SYNC'));
+                else if (sock?.ws?.close) sock.ws.close();
+            } catch {}
+
+            const waitForHistoryStart = async (timeoutMs: number) => {
+                const start = Date.now();
+                while (Date.now() - start < timeoutMs) {
+                    const lastAt = this.lastHistorySetAt.get(deviceId) || 0;
+                    if (lastAt > previousHistoryAt) return true;
+                    const cur = this.getMessageSummary(deviceId);
+                    if (cur.totalMessages > 0) return true;
+                    await new Promise((r) => setTimeout(r, 500));
+                }
+                return false;
+            };
+
+            const started = await waitForHistoryStart(30000);
+            if (!started) {
+                const cur = this.getMessageSummary(deviceId);
+                return { success: cur.totalMessages > 0, ...cur, error: 'No se recibió historial del dispositivo' };
+            }
+
+            const start = Date.now();
+            let lastChangeAt = Date.now();
+            let lastCount = this.getMessageSummary(deviceId).totalMessages;
+
+            while (Date.now() - start < 120000) {
+                const latest = this.historySyncIsLatest.get(deviceId) === true;
+                const progress = this.historySyncProgress.get(deviceId);
+                const curCount = this.getMessageSummary(deviceId).totalMessages;
+                if (curCount !== lastCount) {
+                    lastCount = curCount;
+                    lastChangeAt = Date.now();
+                }
+                if (latest) break;
+                if (typeof progress === 'number' && progress >= 1) break;
+                if (Date.now() - lastChangeAt > 5000) break;
+                await new Promise((r) => setTimeout(r, 700));
+            }
+
+            const final = this.getMessageSummary(deviceId);
+            return { success: final.totalMessages > 0, ...final };
+        } finally {
+            this.importInProgress.delete(lockKey);
+        }
     }
 
     public async initDevice(deviceId: string, mode?: 'qr' | 'code') {
@@ -836,11 +950,13 @@ export class DeviceManager {
         stores.set(deviceId, store);
 
         const currentMode = this.pairingMode.get(deviceId) || mode || 'qr';
-        
-        // Estrategia agresiva: Edge en Windows suele ser muy estable para pairing
-        const browser = currentMode === 'code'
-            ? ["Chrome (Windows)", "Chrome", "131.0.0.0"]
-            : ["Panel Multi-Dispositivo", "Chrome", "1.0.0"];
+        const forceFullSync = this.forceFullHistorySync.has(deviceId);
+
+        const browser = forceFullSync
+            ? ["Windows", "Desktop", "10"]
+            : currentMode === 'code'
+              ? ["Chrome (Windows)", "Chrome", "131.0.0.0"]
+              : ["Panel Multi-Dispositivo", "Chrome", "1.0.0"];
 
         const sock = makeWASocket({
             version,
@@ -859,6 +975,7 @@ export class DeviceManager {
             // Evitar marcas de online prematuras
             markOnlineOnConnect: false,
             generateHighQualityLinkPreview: true,
+            ...(forceFullSync ? { syncFullHistory: true, shouldSyncHistoryMessage: () => true } : {}),
             browser: browser as any
         });
 
@@ -928,12 +1045,16 @@ export class DeviceManager {
             } else if (connection === 'open') {
                 this.clearConnectWatchdog(deviceId);
                 this.reconnectAttempts.set(deviceId, 0);
+                this.forceFullHistorySync.delete(deviceId);
                 const phoneNumber = sock.user?.id.split(':')[0] || null;
                 this.updateDevice(deviceId, { status: 'CONNECTED', phoneNumber, qr: null });
             }
         });
 
-        sock.ev.on('messaging-history.set', ({ chats, contacts, messages }) => {
+        sock.ev.on('messaging-history.set', ({ chats, contacts, messages, isLatest, progress }) => {
+            this.lastHistorySetAt.set(deviceId, Date.now());
+            if (typeof progress === 'number') this.historySyncProgress.set(deviceId, progress);
+            if (typeof isLatest === 'boolean') this.historySyncIsLatest.set(deviceId, isLatest);
             const store = stores.get(deviceId);
             if (!store) return;
 
