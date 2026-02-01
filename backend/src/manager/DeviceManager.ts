@@ -276,6 +276,7 @@ export class DeviceManager {
     private historySyncProgress: Map<string, number | null> = new Map();
     private historySyncIsLatest: Map<string, boolean> = new Map();
     private importJobs: Map<string, ImportJobState> = new Map();
+    private messageRetentionDays = 90;
 
     private constructor() {
         ensureDir(DB_ROOT);
@@ -649,10 +650,15 @@ export class DeviceManager {
     }
 
     private initRetentionJob() {
-        // Run every day at midnight
         cron.schedule('0 0 * * *', () => {
             logger.info('Running retention policy job...');
             this.cleanupOldFiles(30); // 30 days retention
+        });
+
+        cron.schedule('0 * * * *', () => {
+            try {
+                this.pruneOldMessagesForAllDevices();
+            } catch {}
         });
     }
 
@@ -660,6 +666,57 @@ export class DeviceManager {
         const threshold = Date.now() - (days * 24 * 60 * 60 * 1000);
         // Logic to delete files from storageRoot based on file system stats
         // This is a simplified version
+    }
+
+    private getMessageRetentionCutoffMs(nowMs: number) {
+        return nowMs - this.messageRetentionDays * 24 * 60 * 60 * 1000;
+    }
+
+    private getStoredMessageTimestampMs(msg: any) {
+        const direct = Number(msg?.timestamp);
+        if (Number.isFinite(direct) && direct > 0) return direct;
+        const tsSec = msg?.messageTimestamp != null ? Number(msg.messageTimestamp) : Number(msg?.key?.messageTimestamp);
+        if (Number.isFinite(tsSec) && tsSec > 0) return tsSec * 1000;
+        const msgTsSec = msg?.key?.id && msg?.messageTimestamp != null ? Number(msg.messageTimestamp) : NaN;
+        if (Number.isFinite(msgTsSec) && msgTsSec > 0) return msgTsSec * 1000;
+        return 0;
+    }
+
+    private pruneOldMessages(deviceId: string, nowMs: number = Date.now()) {
+        const store = stores.get(deviceId);
+        if (!store) return { removed: 0, remaining: 0 };
+        const cutoff = this.getMessageRetentionCutoffMs(nowMs);
+        let removed = 0;
+        let remaining = 0;
+
+        for (const [chatId, msgs] of store.messages.entries()) {
+            if (!Array.isArray(msgs) || msgs.length === 0) {
+                store.messages.delete(chatId);
+                continue;
+            }
+            const filtered = msgs.filter((m: any) => {
+                const ts = this.getStoredMessageTimestampMs(m);
+                if (!ts) return false;
+                return ts >= cutoff;
+            });
+            removed += msgs.length - filtered.length;
+            if (filtered.length) {
+                store.messages.set(chatId, filtered);
+                remaining += filtered.length;
+            } else {
+                store.messages.delete(chatId);
+            }
+        }
+
+        return { removed, remaining };
+    }
+
+    private pruneOldMessagesForAllDevices() {
+        const now = Date.now();
+        for (const deviceId of stores.keys()) {
+            this.pruneOldMessages(deviceId, now);
+            this.updateImportJobFromStore(deviceId);
+        }
     }
 
     private async handleMedia(deviceId: string, msg: any) {
@@ -734,6 +791,7 @@ export class DeviceManager {
 
         const tsSec = msg.messageTimestamp ? Number(msg.messageTimestamp) : 0;
         const timestamp = tsSec ? tsSec * 1000 : Date.now();
+        if (timestamp < this.getMessageRetentionCutoffMs(Date.now())) return;
         const fromMe = Boolean(msg?.key?.fromMe);
 
         if (store) {
@@ -908,6 +966,7 @@ export class DeviceManager {
     public getMessageSummary(deviceId: string) {
         const store = stores.get(deviceId);
         if (!store) return { totalMessages: 0, chatsWithMessages: 0 };
+        this.pruneOldMessages(deviceId);
         let totalMessages = 0;
         let chatsWithMessages = 0;
         for (const msgs of store.messages.values()) {
@@ -2113,6 +2172,8 @@ export class DeviceManager {
                 return [];
             }
 
+            this.pruneOldMessages(deviceId);
+
             const canonicalId = resolveCanonicalChatId(store, chatId);
 
             // Cargar mensajes del chat
@@ -2238,6 +2299,8 @@ export class DeviceManager {
         if (!store) {
             throw new Error('Dispositivo no tiene mensajes en memoria');
         }
+
+        this.pruneOldMessages(deviceId);
 
         const results: any[] = [];
         const searchQuery = query.toLowerCase().trim();
