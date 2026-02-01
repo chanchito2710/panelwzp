@@ -122,7 +122,8 @@ export const BranchNotificationsModal = ({
                             { id: 9, name: 'Chime' },
                             { id: 10, name: 'Deep' },
                             { id: 11, name: 'Sapeee (Bananero)' },
-                            { id: 12, name: 'Bird (Ave)' }
+                            { id: 12, name: 'Bird (Ave)' },
+                            { id: 13, name: 'Lokita (Bananero)' }
                         ].map(tone => (
                             <div key={tone.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px', background: '#202c33', borderRadius: 8, border: '1px solid #2a3942' }}>
                                 <Radio value={tone.id} style={{ color: '#e9edef' }}>{tone.name}</Radio>
@@ -198,4 +199,3 @@ export const BranchNotificationsModal = ({
         </Modal>
     );
 };
-

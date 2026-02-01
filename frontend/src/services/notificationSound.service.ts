@@ -7,6 +7,7 @@ const clamp = (n: number, min: number, max: number) => Math.min(max, Math.max(mi
 
 let audioCtx: AudioContext | null = null;
 let sapeAudio: HTMLAudioElement | null = null;
+let lokitaAudio: HTMLAudioElement | null = null;
 
 const getAudioCtx = () => {
     if (audioCtx) return audioCtx;
@@ -52,6 +53,16 @@ export const playNotificationTone = ({ toneId, volume }: ToneRequest) => {
                 sapeAudio.preload = 'auto';
             }
             const a = sapeAudio.cloneNode(true) as HTMLAudioElement;
+            a.volume = clamp(vol, 0, 1);
+            a.play().catch(() => {});
+            return;
+        }
+        if (toneId === 13) {
+            if (!lokitaAudio) {
+                lokitaAudio = new Audio('https://www.myinstants.com/media/sounds/mas-bien-loquita.mp3');
+                lokitaAudio.preload = 'auto';
+            }
+            const a = lokitaAudio.cloneNode(true) as HTMLAudioElement;
             a.volume = clamp(vol, 0, 1);
             a.play().catch(() => {});
             return;
@@ -129,4 +140,3 @@ export const playNotificationTone = ({ toneId, volume }: ToneRequest) => {
         }
     } catch {}
 };
-
