@@ -4,6 +4,8 @@ import { MessageSquare } from 'lucide-react';
 import { WhatsAppPanelModal } from './components/WhatsAppPanelModal';
 import { Login } from './components/Login';
 import { clearAuthToken, getAuthToken } from './lib/auth';
+import { unlockNotificationAudio } from './services/notificationSound.service';
+import { initTts } from './services/tts.service';
 
 function App() {
     const [isModalOpen, setIsModalOpen] = useState(false);
@@ -30,6 +32,7 @@ function App() {
                 osc.start(now);
                 osc.stop(now + 0.01);
             } catch {}
+            unlockNotificationAudio();
         };
 
         window.addEventListener('pointerdown', unlock, true);
@@ -38,6 +41,10 @@ function App() {
             window.removeEventListener('pointerdown', unlock, true);
             window.removeEventListener('keydown', unlock, true);
         };
+    }, []);
+
+    useEffect(() => {
+        initTts();
     }, []);
 
     if (!authed) {

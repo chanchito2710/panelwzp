@@ -5,6 +5,9 @@ import QRCode from 'react-qr-code';
 import { useSocket } from '../hooks/useSocket';
 import { apiFetch, assetUrl } from '../lib/runtime';
 import { PairingCodeModal } from './PairingCodeModal';
+import { AppSettingsModal } from './AppSettingsModal';
+import { notifyIncomingMessage } from '../services/notificationDispatcher.service';
+import { setActiveChatId, setChatOpen } from '../services/notificationFocus.service';
 
 const { Sider, Content } = Layout;
 const { Text } = Typography;
@@ -63,6 +66,7 @@ export const ChatInterface = ({ device, onClose }: { device: Device; onClose?: (
     const [currentDevice, setCurrentDevice] = useState<Device>(device);
     const [chats, setChats] = useState<Chat[]>([]);
     const [messages, setMessages] = useState<Message[]>([]);
+    const chatsRef = useRef<Chat[]>([]);
     const [inputText, setInputText] = useState('');
     const [loading, setLoading] = useState(false);
     const [uploadingFile, setUploadingFile] = useState(false);
@@ -95,6 +99,10 @@ export const ChatInterface = ({ device, onClose }: { device: Device; onClose?: (
     const notificationAudioCtxRef = useRef<AudioContext | null>(null);
     const lastNotificationSoundKeyRef = useRef<string>('');
 
+    useEffect(() => {
+        chatsRef.current = chats;
+    }, [chats]);
+
     const getChatKey = (chatId: string | null | undefined) => {
         if (!chatId) return '';
         if (chatId.includes('@g.us')) return chatId;
@@ -117,6 +125,15 @@ export const ChatInterface = ({ device, onClose }: { device: Device; onClose?: (
         window.addEventListener('pointerdown', unlock, true);
         return () => window.removeEventListener('pointerdown', unlock, true);
     }, []);
+
+    useEffect(() => {
+        setChatOpen(true);
+        return () => setChatOpen(false);
+    }, []);
+
+    useEffect(() => {
+        setActiveChatId(activeChat);
+    }, [activeChat]);
 
     // Cargar plantillas para atajos
     useEffect(() => {
@@ -384,14 +401,17 @@ export const ChatInterface = ({ device, onClose }: { device: Device; onClose?: (
         socket.on('message:new', (data: { deviceId: string, chatId: string, msg: Message }) => {
             if (data.deviceId === device.id) {
                 console.log('Mensaje nuevo recibido:', data);
-
-                // Reproducir sonido si el mensaje NO es enviado por mí
                 if (!data.msg.fromMe) {
-                    const soundKey = `${data.deviceId}:${getChatKey(data.chatId)}:${data.msg.id || data.msg.timestamp}`;
-                    if (soundKey !== lastNotificationSoundKeyRef.current) {
-                        lastNotificationSoundKeyRef.current = soundKey;
-                        playNotificationSound();
-                    }
+                    const incomingKey = getChatKey(data.chatId);
+                    const existingName = chatsRef.current.find(c => getChatKey(c.id) === incomingKey)?.name || null;
+                    notifyIncomingMessage({
+                        deviceId: String(data.deviceId),
+                        chatId: String(data.chatId),
+                        fromMe: false,
+                        msgId: data.msg?.id ? String(data.msg.id) : null,
+                        timestamp: typeof data.msg?.timestamp === 'number' ? data.msg.timestamp : undefined,
+                        contactName: existingName
+                    });
                 }
 
                 const incomingKey = getChatKey(data.chatId);
@@ -778,81 +798,10 @@ export const ChatInterface = ({ device, onClose }: { device: Device; onClose?: (
 
     // Contenido del Modal de Configuración
     const settingsModalContent = (
-        <Modal
+        <AppSettingsModal
             open={showSettingsModal}
-            title="Configuración"
-            onCancel={() => setShowSettingsModal(false)}
-            footer={null}
-            width={400}
-        >
-            <Typography.Title level={5}>Tono de notificación</Typography.Title>
-            <div style={{ maxHeight: 300, overflowY: 'auto' }}>
-                <Radio.Group 
-                    onChange={(e) => {
-                        const val = e.target.value;
-                        setSelectedTone(val);
-                        localStorage.setItem('notificationTone', val.toString());
-                        playNotificationSound(val);
-                    }} 
-                    value={selectedTone}
-                    style={{ display: 'flex', flexDirection: 'column', gap: 10 }}
-                >
-                    {[
-                        { id: 1, name: 'Beep' },
-                        { id: 2, name: 'Crystal' },
-                        { id: 3, name: 'Bubble' },
-                        { id: 4, name: 'Notification' },
-                        { id: 5, name: 'Success' },
-                        { id: 6, name: 'Laser' },
-                        { id: 7, name: 'Coin' },
-                        { id: 8, name: 'Pluck' },
-                        { id: 9, name: 'Chime' },
-                        { id: 10, name: 'Deep' },
-                        { id: 11, name: 'Sapeee (Bananero)' },
-                        { id: 12, name: 'Bird (Ave)' },
-                    ].map(tone => (
-                        <div key={tone.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px', background: '#202c33', borderRadius: 8, border: '1px solid #2a3942' }}>
-                            <Radio value={tone.id} style={{ color: '#e9edef' }}>{tone.name}</Radio>
-                            <Button 
-                                size="small" 
-                                icon={<Play size={14} color="#8696a0" />} 
-                                type="text"
-                                onClick={(e) => {
-                                    e.stopPropagation();
-                                    playNotificationSound(tone.id);
-                                }}
-                            />
-                        </div>
-                    ))}
-                </Radio.Group>
-            </div>
-            <Divider />
-            <Typography.Title level={5}>Seguridad</Typography.Title>
-            <Space direction="vertical" style={{ width: '100%' }}>
-                <Input.Password
-                    value={currentPassword}
-                    onChange={(e) => setCurrentPassword(e.target.value)}
-                    placeholder="Contraseña actual"
-                    autoComplete="current-password"
-                />
-                <Input.Password
-                    value={newPassword}
-                    onChange={(e) => setNewPassword(e.target.value)}
-                    placeholder="Nueva contraseña"
-                    autoComplete="new-password"
-                />
-                <Input.Password
-                    value={confirmNewPassword}
-                    onChange={(e) => setConfirmNewPassword(e.target.value)}
-                    placeholder="Confirmar nueva contraseña"
-                    autoComplete="new-password"
-                    onPressEnter={submitPasswordChange}
-                />
-                <Button type="primary" onClick={submitPasswordChange} loading={changingPassword}>
-                    Cambiar contraseña
-                </Button>
-            </Space>
-        </Modal>
+            onClose={() => setShowSettingsModal(false)}
+        />
     );
 
     if (currentDevice.status === 'DISCONNECTED' || currentDevice.status === 'CONNECTING' || currentDevice.status === 'PAIRING_CODE_READY') {
