@@ -1167,6 +1167,39 @@ export const ChatInterface = ({
                     Cambiar contraseña
                 </Button>
             </Space>
+            <Divider />
+            <Typography.Title level={5}>Mantenimiento</Typography.Title>
+            <Space direction="vertical" style={{ width: '100%' }}>
+                <Popconfirm
+                    title="¿Resetear cache de chats?"
+                    description="Esto limpiará todos los nombres y datos en cache. Los chats se recargarán con datos frescos."
+                    onConfirm={async () => {
+                        try {
+                            const res = await apiFetch(`/api/devices/${device.id}/reset-cache`, { method: 'POST' });
+                            const data = await res.json();
+                            if (data.success) {
+                                messageApi.success('Cache reseteado. Recargando...');
+                                setChats([]);
+                                setTimeout(() => window.location.reload(), 1500);
+                            } else {
+                                messageApi.error(data.message || 'Error al resetear');
+                            }
+                        } catch (err: any) {
+                            messageApi.error('Error: ' + (err.message || 'Desconocido'));
+                        }
+                    }}
+                    okText="Sí, resetear"
+                    cancelText="Cancelar"
+                    okButtonProps={{ danger: true }}
+                >
+                    <Button danger block>
+                        🔄 Resetear cache de chats
+                    </Button>
+                </Popconfirm>
+                <Text type="secondary" style={{ fontSize: 11 }}>
+                    Usa esto si ves nombres incorrectos o datos mezclados
+                </Text>
+            </Space>
         </Modal>
     );
 

@@ -523,6 +523,17 @@ app.post('/api/devices/:id/disconnect-clean', async (req, res) => {
     }
 });
 
+// Reset completo del cache de chats/contactos (mantiene sesión de WhatsApp)
+app.post('/api/devices/:id/reset-cache', async (req, res) => {
+    try {
+        const result = await deviceManager.resetDeviceCache(req.params.id);
+        audit(req, 'device_cache_reset', null, { deviceId: req.params.id });
+        res.json(result);
+    } catch (error: any) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
 // Eliminar dispositivo completamente
 app.delete('/api/devices/:id', async (req, res) => {
     try {

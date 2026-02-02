@@ -2173,41 +2173,26 @@ export class DeviceManager {
             const chats = Array.from(store.chats.values());
             console.log(`[${deviceId}] Chats encontrados en store: ${chats.length}`);
 
-            const merged = new Map<string, { ids: string[]; lastMessageTime: number; unreadCount: number; names: string[] }>();
-            for (const chat of chats) {
-                const id = String(chat?.id || '');
-                if (!id) continue;
-                let canonical = resolveCanonicalChatId(store, id);
-                if (canonical !== id) mergeChatData(store, id, canonical);
-
-                const entry = merged.get(canonical) || { ids: [], lastMessageTime: 0, unreadCount: 0, names: [] };
-                if (!entry.ids.includes(id)) entry.ids.push(id);
-
+            // IMPORTANTE: NO fusionar chats agresivamente - cada chat mantiene su identidad
+            const result = chats.map(chat => {
+                const chatId = String(chat?.id || '');
+                if (!chatId) return null;
+                
                 const ts = Number(chat?.conversationTimestamp || 0);
-                if (Number.isFinite(ts) && ts > entry.lastMessageTime) entry.lastMessageTime = ts;
-
                 const unread = Number(chat?.unreadCount || 0);
-                if (Number.isFinite(unread) && unread > 0) entry.unreadCount += unread;
-
-                const n = String(chat?.name || '').trim();
-                if (n) entry.names.push(n);
-
-                merged.set(canonical, entry);
-            }
-
-            const result = Array.from(merged.entries()).map(([canonicalId, entry]) => {
-                const contactName =
-                    store.contacts.get(canonicalId) ||
-                    entry.ids.map((id) => store.contacts.get(id)).find(Boolean) ||
-                    entry.names.find(Boolean) ||
-                    '';
-
-                const displayName = String(contactName || '').trim() || canonicalId.split('@')[0];
-                const lastMessageTime = entry.lastMessageTime || Date.now();
-                const profilePhotoUrl = store.profilePhotos.get(canonicalId)?.url || null;
+                
+                // Obtener nombre SOLO del contacto específico de este chat
+                // NO buscar en otros IDs para evitar mezcla de nombres
+                const contactName = store.contacts.get(chatId);
+                const chatName = String(chat?.name || '').trim();
+                
+                // Prioridad: contactName del ID específico > nombre del chat > ID limpio
+                const displayName = contactName || chatName || chatId.split('@')[0];
+                const lastMessageTime = ts || Date.now();
+                const profilePhotoUrl = store.profilePhotos.get(chatId)?.url || null;
                 
                 // Obtener último mensaje del store
-                const chatMessages = store.messages.get(canonicalId) || [];
+                const chatMessages = store.messages.get(chatId) || [];
                 const lastMsg = chatMessages.length > 0 ? chatMessages[chatMessages.length - 1] : null;
                 
                 let lastMessage: string | null = null;
@@ -2229,24 +2214,24 @@ export class DeviceManager {
                 }
                 
                 return {
-                    id: canonicalId,
+                    id: chatId,
                     name: displayName,
                     lastMessageTime,
-                    unreadCount: entry.unreadCount || 0,
-                    isGroup: canonicalId.endsWith('@g.us'),
+                    unreadCount: unread || 0,
+                    isGroup: chatId.endsWith('@g.us'),
                     profilePhotoUrl,
                     lastMessage,
                     lastMessageType,
                     lastMessageFromMe,
                     lastMessageMedia
                 };
-            });
+            }).filter((c): c is NonNullable<typeof c> => c !== null); // Eliminar nulls con type guard
 
-            const sorted = result.sort((a: any, b: any) => b.lastMessageTime - a.lastMessageTime);
+            const sorted = result.sort((a, b) => b.lastMessageTime - a.lastMessageTime);
             for (const chat of sorted.slice(0, 15)) {
-                if (chat?.isGroup) continue;
-                if (chat?.profilePhotoUrl) continue;
-                this.scheduleProfilePhotoFetch(deviceId, String(chat.id));
+                if (chat.isGroup) continue;
+                if (chat.profilePhotoUrl) continue;
+                this.scheduleProfilePhotoFetch(deviceId, chat.id);
             }
             return sorted;
         } catch (error) {
@@ -2661,5 +2646,61 @@ export class DeviceManager {
     private highlightMatch(text: string, query: string): string {
         const regex = new RegExp(`(${query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
         return text.replace(regex, '**$1**');
+    }
+
+    // Reset completo del cache de un dispositivo (mantiene sesión de WhatsApp)
+    public async resetDeviceCache(deviceId: string): Promise<{ success: boolean; message: string }> {
+        try {
+            console.log(`[${deviceId}] Iniciando reset de cache...`);
+
+            // 1. Limpiar store en memoria
+            const store = stores.get(deviceId);
+            if (store) {
+                store.chats.clear();
+                store.messages.clear();
+                store.contacts.clear();
+                store.aliases.clear();
+                store.canonicalByKey.clear();
+                store.profilePhotos.clear();
+                store.lidToPhone.clear();
+                store.phoneToLid.clear();
+                store.lastPushName.clear();
+                console.log(`[${deviceId}] Store en memoria limpiado`);
+            }
+
+            // 2. Limpiar datos en base de datos (si está configurada)
+            const prisma = getPrisma();
+            if (prisma) {
+                // Eliminar mensajes del dispositivo
+                await prisma.message.deleteMany({ where: { deviceId } });
+                // Eliminar chats del dispositivo
+                await prisma.chat.deleteMany({ where: { deviceId } });
+                console.log(`[${deviceId}] Datos de DB limpiados`);
+            }
+
+            // 3. Limpiar archivos de disco (mensajes persistidos)
+            const msgsDir = dbPath('messages');
+            const deviceMsgsFile = path.join(msgsDir, `${deviceId}.ndjson`);
+            if (fs.existsSync(deviceMsgsFile)) {
+                fs.unlinkSync(deviceMsgsFile);
+                console.log(`[${deviceId}] Archivo de mensajes eliminado`);
+            }
+
+            // 4. Limpiar avatares del dispositivo
+            const avatarsDir = dbPath('storage', 'avatars');
+            if (fs.existsSync(avatarsDir)) {
+                // Solo limpiar si la carpeta existe
+                console.log(`[${deviceId}] Carpeta de avatares disponible para limpieza`);
+            }
+
+            // 5. Emitir evento de actualización
+            this.io?.emit('device:cache:reset', { deviceId });
+
+            console.log(`[${deviceId}] Reset de cache completado`);
+            return { success: true, message: 'Cache reseteado correctamente. Los chats se recargarán con los datos correctos.' };
+        } catch (error: any) {
+            console.error(`[${deviceId}] Error en reset de cache:`, error);
+            return { success: false, message: error.message || 'Error al resetear cache' };
+        }
     }
 }
