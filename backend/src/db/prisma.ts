@@ -33,9 +33,8 @@ export function getPrisma(): PrismaClient | null {
         return null;
     }
     if (!prisma) {
-        // Prisma ORM v7: el override soportado es `datasourceUrl`.
-        // (La opción `datasources` ya no existe en PrismaClientOptions).
-        prisma = new PrismaClient({ datasourceUrl: url });
+        // Con `url = env("DATABASE_URL")` en schema.prisma, no necesitamos overrides acá.
+        prisma = new PrismaClient();
     }
     return prisma;
 }

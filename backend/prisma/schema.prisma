@@ -7,6 +7,9 @@ generator client {
 
 datasource db {
   provider = "mysql"
+  // Prisma ORM v7 recomienda mover URLs a prisma.config.ts, pero en runtime
+  // el cliente necesita una URL resoluble. Mantener env() aquí da estabilidad.
+  url      = env("DATABASE_URL")
 }
 
 model Device {
