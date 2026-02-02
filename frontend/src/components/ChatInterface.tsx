@@ -127,21 +127,23 @@ export const ChatInterface = ({
     // Cancelar respuesta
     const cancelReply = () => setReplyingTo(null);
 
-    // Inyectar estilos de animación para las tarjetas de chat
+    // Inyectar estilos de animación RETRO para las tarjetas de chat
     useEffect(() => {
-        const styleId = 'chat-card-animations';
+        const styleId = 'chat-card-animations-retro';
         if (document.getElementById(styleId)) return;
         
         const style = document.createElement('style');
         style.id = styleId;
         style.textContent = `
-            /* Animación de zumbido/vibración */
+            /* === TEMA RETRO - Animaciones de Chat === */
+            
+            /* Animación de zumbido vintage */
             @keyframes chatBuzz {
                 0%, 100% { transform: translateX(0); }
-                10% { transform: translateX(-3px) rotate(-1deg); }
-                20% { transform: translateX(3px) rotate(1deg); }
-                30% { transform: translateX(-3px) rotate(-1deg); }
-                40% { transform: translateX(3px) rotate(1deg); }
+                10% { transform: translateX(-3px) rotate(-0.5deg); }
+                20% { transform: translateX(3px) rotate(0.5deg); }
+                30% { transform: translateX(-3px) rotate(-0.5deg); }
+                40% { transform: translateX(3px) rotate(0.5deg); }
                 50% { transform: translateX(-2px); }
                 60% { transform: translateX(2px); }
                 70% { transform: translateX(-1px); }
@@ -149,27 +151,28 @@ export const ChatInterface = ({
                 90% { transform: translateX(0); }
             }
             
-            /* Animación de pulso de color */
+            /* Pulso dorado vintage */
             @keyframes chatPulse {
-                0% { background: linear-gradient(90deg, #1a3a2a 0%, #0d2818 50%, #1a3a2a 100%); }
-                25% { background: linear-gradient(90deg, #25D366 0%, #1a3a2a 50%, #25D366 100%); }
-                50% { background: linear-gradient(90deg, #1a3a2a 0%, #25D366 50%, #1a3a2a 100%); }
-                75% { background: linear-gradient(90deg, #25D366 0%, #1a3a2a 50%, #25D366 100%); }
-                100% { background: linear-gradient(90deg, #1a3a2a 0%, #0d2818 50%, #1a3a2a 100%); }
+                0% { background: linear-gradient(90deg, #2f261d 0%, #1a1410 50%, #2f261d 100%); }
+                25% { background: linear-gradient(90deg, rgba(201, 162, 39, 0.2) 0%, #2f261d 50%, rgba(201, 162, 39, 0.2) 100%); }
+                50% { background: linear-gradient(90deg, #2f261d 0%, rgba(201, 162, 39, 0.3) 50%, #2f261d 100%); }
+                75% { background: linear-gradient(90deg, rgba(201, 162, 39, 0.2) 0%, #2f261d 50%, rgba(201, 162, 39, 0.2) 100%); }
+                100% { background: linear-gradient(90deg, #2f261d 0%, #1a1410 50%, #2f261d 100%); }
             }
             
-            /* Clase para chat con notificación */
+            /* Clase para chat con notificación - estilo retro */
             .chat-item-notified {
                 animation: chatBuzz 0.6s ease-in-out, chatPulse 1.5s ease-in-out;
-                box-shadow: 0 0 15px rgba(37, 211, 102, 0.4), inset 0 0 10px rgba(37, 211, 102, 0.1);
-                border-left: 3px solid #25D366 !important;
+                box-shadow: 0 0 20px rgba(201, 162, 39, 0.3), inset 0 0 15px rgba(201, 162, 39, 0.05);
+                border-left: 3px solid #c9a227 !important;
             }
             
-            /* Hover para tarjetas de chat */
+            /* Hover retro para tarjetas de chat */
             .chat-item-card {
-                transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+                transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
                 position: relative;
                 overflow: hidden;
+                font-family: 'Crimson Text', Georgia, serif;
             }
             
             .chat-item-card::before {
@@ -179,7 +182,7 @@ export const ChatInterface = ({
                 left: -100%;
                 width: 100%;
                 height: 100%;
-                background: linear-gradient(90deg, transparent, rgba(37, 211, 102, 0.1), transparent);
+                background: linear-gradient(90deg, transparent, rgba(201, 162, 39, 0.08), transparent);
                 transition: left 0.5s ease;
             }
             
@@ -188,19 +191,20 @@ export const ChatInterface = ({
             }
             
             .chat-item-card:hover {
-                background: #202c33 !important;
+                background: linear-gradient(90deg, rgba(47, 38, 29, 0.8) 0%, rgba(42, 34, 24, 0.9) 100%) !important;
                 transform: scale(1.01);
-                box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+                box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
             }
             
             .chat-item-card:active {
                 transform: scale(0.99);
             }
             
-            /* Avatar hover efecto */
+            /* Avatar hover efecto retro */
             .chat-item-card:hover .ant-avatar {
-                transform: scale(1.05);
+                transform: scale(1.08);
                 transition: transform 0.2s ease;
+                box-shadow: 0 0 10px rgba(201, 162, 39, 0.3);
             }
         `;
         document.head.appendChild(style);
@@ -1266,18 +1270,22 @@ export const ChatInterface = ({
     }
 
     return (
-        <Layout style={{ height: '100%', background: '#0b141a' }}>
+        <Layout style={{ height: '100%', background: 'linear-gradient(180deg, #1a1410 0%, #0f0c08 100%)' }}>
             {contextHolder}
             {notificationContextHolder}
-            <Sider width={300} style={{ background: '#111b21', borderRight: '1px solid #222e35' }}>
-                <div style={{ padding: '10px' }}>
+            <Sider width={300} style={{ 
+                background: 'linear-gradient(180deg, #2a2218 0%, #1a1410 100%)', 
+                borderRight: '2px solid',
+                borderImage: 'linear-gradient(180deg, rgba(201, 162, 39, 0.3), transparent) 1'
+            }}>
+                <div style={{ padding: '12px' }}>
                     <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
                         <Input
-                            prefix={<Search size={14} color="#8696a0" />}
+                            prefix={<Search size={14} color="#8b7b65" />}
                             suffix={searchQuery && (
                                 <X
                                     size={14}
-                                    color="#8696a0"
+                                    color="#8b7b65"
                                     style={{ cursor: 'pointer' }}
                                     onClick={() => {
                                         setSearchQuery('');
@@ -1289,18 +1297,34 @@ export const ChatInterface = ({
                             placeholder={activeChat ? "Buscar mensajes en este chat..." : "Buscar mensajes..."}
                             value={searchQuery}
                             onChange={(e) => handleSearch(e.target.value)}
-                            style={{ borderRadius: '8px', background: '#202c33', color: '#d1d7db', border: 'none', flex: 1 }}
+                            style={{ 
+                                borderRadius: '8px', 
+                                background: 'linear-gradient(145deg, #1a1410 0%, #0f0c08 100%)', 
+                                color: '#f5e6c8', 
+                                border: '1px solid rgba(74, 61, 46, 0.6)', 
+                                flex: 1,
+                                fontFamily: "'Crimson Text', Georgia, serif"
+                            }}
                         />
                         <Button 
-                            icon={<Settings size={16} color="#8696a0" />} 
-                            style={{ background: '#202c33', border: 'none' }}
+                            icon={<Settings size={16} color="#c9a227" />} 
+                            style={{ 
+                                background: 'linear-gradient(145deg, #3d3225 0%, #2a2218 100%)', 
+                                border: '1px solid rgba(201, 162, 39, 0.3)' 
+                            }}
                             onClick={() => setShowSettingsModal(true)}
                         />
                     </div>
                 </div>
                 <div style={{ overflowY: 'auto', height: 'calc(100% - 60px)' }}>
                     {chats.length === 0 ? (
-                        <div style={{ padding: 40, textAlign: 'center', color: '#8696a0' }}>
+                        <div style={{ 
+                            padding: 40, 
+                            textAlign: 'center', 
+                            color: '#8b7b65',
+                            fontFamily: "'Crimson Text', Georgia, serif",
+                            fontStyle: 'italic'
+                        }}>
                             <p>No hay chats disponibles</p>
                             <p style={{ fontSize: '12px' }}>Envía o recibe un mensaje para ver tus conversaciones</p>
                         </div>
@@ -1332,34 +1356,56 @@ export const ChatInterface = ({
                                         setReplyingTo(null);
                                     }}
                                     style={{
-                                        padding: '12px 15px',
-                                        borderBottom: '1px solid #222e35',
+                                        padding: '14px 16px',
+                                        borderBottom: '1px solid rgba(74, 61, 46, 0.4)',
                                         cursor: 'pointer',
-                                        background: isActive ? '#2a3942' : 'transparent',
-                                        borderLeft: isActive ? '3px solid #25D366' : '3px solid transparent'
+                                        background: isActive 
+                                            ? 'linear-gradient(90deg, rgba(201, 162, 39, 0.15) 0%, rgba(47, 38, 29, 0.9) 100%)' 
+                                            : 'transparent',
+                                        borderLeft: isActive ? '3px solid #c9a227' : '3px solid transparent'
                                     }}
                                 >
                                     <List.Item.Meta
                                         avatar={
                                             <Avatar
-                                                shape="square"
+                                                shape="circle"
                                                 src={chat.profilePhotoUrl ? assetUrl(chat.profilePhotoUrl) : undefined}
-                                                style={{ backgroundColor: chat.isGroup ? '#25D366' : '#6a7175' }}
+                                                style={{ 
+                                                    backgroundColor: chat.isGroup ? '#4a7c59' : '#5a4d3d',
+                                                    border: '2px solid rgba(201, 162, 39, 0.3)',
+                                                    boxShadow: '0 2px 8px rgba(0, 0, 0, 0.3)',
+                                                    fontFamily: "'Playfair Display', Georgia, serif",
+                                                    fontWeight: 700
+                                                }}
                                             >
                                                 {chat.name.substring(0, 2).toUpperCase()}
                                             </Avatar>
                                         }
                                         title={
-                                            <div style={{ color: '#e9edef', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                                <span>{chat.name}</span>
+                                            <div style={{ 
+                                                color: '#f5e6c8', 
+                                                display: 'flex', 
+                                                justifyContent: 'space-between', 
+                                                alignItems: 'center',
+                                                fontFamily: "'Crimson Text', Georgia, serif"
+                                            }}>
+                                                <span style={{ fontWeight: 600 }}>{chat.name}</span>
                                                 <Space size={4}>
                                                     {chat.unreadCount > 0 && (
                                                         <Badge
                                                             count={chat.unreadCount}
-                                                            style={{ backgroundColor: '#25D366' }}
+                                                            style={{ 
+                                                                background: 'linear-gradient(145deg, #cd7f32 0%, #b87333 100%)',
+                                                                boxShadow: '0 2px 8px rgba(205, 127, 50, 0.4)'
+                                                            }}
                                                         />
                                                     )}
-                                                    <span style={{ fontSize: '11px', color: '#8696a0' }}>
+                                                    <span style={{ 
+                                                        fontSize: '11px', 
+                                                        color: '#8b7b65',
+                                                        fontFamily: "'Source Serif Pro', Georgia, serif",
+                                                        fontStyle: 'italic'
+                                                    }}>
                                                         {new Date(chat.lastMessageTime).toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit' })}
                                                     </span>
                                                     <div onClick={(e) => e.stopPropagation()}>
@@ -1373,7 +1419,7 @@ export const ChatInterface = ({
                                                             <Button 
                                                                 type="text" 
                                                                 size="small" 
-                                                                icon={<Trash2 size={14} color="#8696a0" />} 
+                                                                icon={<Trash2 size={14} color="#8b7b65" />} 
                                                                 style={{ minWidth: 24, padding: 0 }}
                                                             />
                                                         </Popconfirm>
@@ -1382,7 +1428,15 @@ export const ChatInterface = ({
                                             </div>
                                         }
                                         description={
-                                            <div style={{ color: '#8696a0', fontSize: '13px', display: 'flex', alignItems: 'center', overflow: 'hidden' }}>
+                                            <div style={{ 
+                                                color: '#8b7b65', 
+                                                fontSize: '13px', 
+                                                display: 'flex', 
+                                                alignItems: 'center', 
+                                                overflow: 'hidden',
+                                                fontFamily: "'Crimson Text', Georgia, serif",
+                                                fontStyle: 'italic'
+                                            }}>
                                                 {renderLastMessagePreview(chat)}
                                             </div>
                                         }
@@ -1394,21 +1448,45 @@ export const ChatInterface = ({
                     )}
                 </div>
             </Sider>
-            <Content style={{ display: 'flex', flexDirection: 'column', background: '#0b141a' }}>
+            <Content style={{ display: 'flex', flexDirection: 'column', background: 'linear-gradient(180deg, #1a1410 0%, #0f0c08 100%)' }}>
                 {activeChat ? (
                     <>
                         {(() => {
                             const activeChatData = chats.find(c => c.id === activeChat);
                             const chatName = activeChatData?.name || activeChat.split('@')[0];
                             return (
-                                <div style={{ padding: '10px 20px', background: '#202c33', display: 'flex', alignItems: 'center', borderBottom: '1px solid #222e35' }}>
-                                    <Avatar style={{ backgroundColor: activeChatData?.isGroup ? '#25D366' : '#6a7175' }}>
+                                <div style={{ 
+                                    padding: '12px 20px', 
+                                    background: 'linear-gradient(180deg, #2f261d 0%, #2a2218 100%)', 
+                                    display: 'flex', 
+                                    alignItems: 'center', 
+                                    borderBottom: '2px solid',
+                                    borderImage: 'linear-gradient(90deg, transparent, rgba(201, 162, 39, 0.4), transparent) 1'
+                                }}>
+                                    <Avatar style={{ 
+                                        backgroundColor: activeChatData?.isGroup ? '#4a7c59' : '#5a4d3d',
+                                        border: '2px solid rgba(201, 162, 39, 0.4)',
+                                        boxShadow: '0 2px 10px rgba(0, 0, 0, 0.3)',
+                                        fontFamily: "'Playfair Display', Georgia, serif",
+                                        fontWeight: 700
+                                    }}>
                                         {chatName.substring(0, 2).toUpperCase()}
                                     </Avatar>
                                     <div style={{ marginLeft: 15 }}>
-                                        <div style={{ color: '#e9edef', fontWeight: 'bold' }}>{chatName}</div>
+                                        <div style={{ 
+                                            color: '#f5e6c8', 
+                                            fontWeight: 'bold',
+                                            fontFamily: "'Playfair Display', Georgia, serif",
+                                            fontSize: '15px',
+                                            letterSpacing: '0.3px'
+                                        }}>{chatName}</div>
                                         {presence && (
-                                            <div style={{ color: '#25D366', fontSize: '11px' }}>
+                                            <div style={{ 
+                                                color: '#c9a227', 
+                                                fontSize: '11px',
+                                                fontFamily: "'Source Serif Pro', Georgia, serif",
+                                                fontStyle: 'italic'
+                                            }}>
                                                 {presence === 'composing' ? 'escribiendo...' : presence === 'recording' ? 'grabando audio...' : ''}
                                             </div>
                                         )}
@@ -1423,7 +1501,15 @@ export const ChatInterface = ({
                                 flex: 1,
                                 padding: 20,
                                 overflowY: 'auto',
-                                background: 'repeating-linear-gradient(45deg, #0b141a 0, #0b141a 12px, #0a1319 12px, #0a1319 24px)',
+                                background: `
+                                    radial-gradient(ellipse at bottom right, rgba(201, 162, 39, 0.03) 0%, transparent 50%),
+                                    repeating-linear-gradient(45deg, 
+                                        rgba(26, 20, 16, 0.95) 0px, 
+                                        rgba(26, 20, 16, 0.95) 12px, 
+                                        rgba(15, 12, 8, 0.95) 12px, 
+                                        rgba(15, 12, 8, 0.95) 24px
+                                    )
+                                `,
                                 backgroundSize: 'auto'
                             }}
                         >
@@ -1457,24 +1543,35 @@ export const ChatInterface = ({
                                             id={m.id ? `msg-${m.id}` : undefined}
                                             style={{
                                                 alignSelf: m.fromMe ? 'flex-end' : 'flex-start',
-                                                background: m.fromMe ? (m.source === 'panel' ? '#005c4b' : '#1f3b2f') : '#202c33',
-                                                padding: '5px',
-                                                borderRadius: '8px',
-                                                color: '#e9edef',
+                                                background: m.fromMe 
+                                                    ? (m.source === 'panel' 
+                                                        ? 'linear-gradient(145deg, #4a7c59 0%, #2d4a35 100%)' 
+                                                        : 'linear-gradient(145deg, #3d5a45 0%, #2a3d30 100%)') 
+                                                    : 'linear-gradient(145deg, #3d3225 0%, #2a2218 100%)',
+                                                padding: '8px',
+                                                borderRadius: '10px',
+                                                color: '#f5e6c8',
                                                 maxWidth: '70%',
-                                                boxShadow: '0 1px 0.5px rgba(0,0,0,0.13)',
+                                                boxShadow: '0 3px 10px rgba(0,0,0,0.3), inset 0 1px 0 rgba(245, 230, 200, 0.05)',
                                                 position: 'relative',
-                                                outline: highlightMsgId && m.id === highlightMsgId ? '2px solid #25D366' : undefined,
-                                                cursor: 'context-menu'
+                                                border: m.fromMe 
+                                                    ? '1px solid rgba(74, 124, 89, 0.4)' 
+                                                    : '1px solid rgba(201, 162, 39, 0.2)',
+                                                outline: highlightMsgId && m.id === highlightMsgId ? '2px solid #c9a227' : undefined,
+                                                cursor: 'context-menu',
+                                                fontFamily: "'Crimson Text', Georgia, serif"
                                             }}
                                         >
-                                            {/* Nombre del remitente para mensajes recibidos */}
+                                            {/* Nombre del remitente para mensajes recibidos - estilo retro */}
                                             {!m.fromMe && m.senderName && (
                                                 <div style={{ 
                                                     fontSize: '12px', 
-                                                    fontWeight: 600, 
-                                                    color: '#25D366',
-                                                    padding: '2px 7px 4px 7px'
+                                                    fontWeight: 700, 
+                                                    color: '#c9a227',
+                                                    padding: '2px 7px 6px 7px',
+                                                    fontFamily: "'Playfair Display', Georgia, serif",
+                                                    letterSpacing: '0.3px',
+                                                    textShadow: '0 1px 2px rgba(0,0,0,0.2)'
                                                 }}>
                                                     {m.senderName}
                                                 </div>
@@ -1543,17 +1640,35 @@ export const ChatInterface = ({
                                                     )}
                                                 </div>
                                             )}
-                                            {m.text && <div style={{ padding: '3px 7px 0 7px' }}>{m.text}</div>}
-                                            <div style={{ fontSize: '10px', color: '#8696a0', textAlign: 'right', marginTop: 4, padding: '0 5px 2px 7px', display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 4 }}>
+                                            {m.text && <div style={{ padding: '3px 7px 0 7px', lineHeight: 1.5 }}>{m.text}</div>}
+                                            <div style={{ 
+                                                fontSize: '10px', 
+                                                color: '#8b7b65', 
+                                                textAlign: 'right', 
+                                                marginTop: 6, 
+                                                padding: '0 5px 2px 7px', 
+                                                display: 'flex', 
+                                                alignItems: 'center', 
+                                                justifyContent: 'flex-end', 
+                                                gap: 6,
+                                                fontFamily: "'Source Serif Pro', Georgia, serif",
+                                                fontStyle: 'italic'
+                                            }}>
                                                 {(m.source === 'panel' || m.source === 'phone' || m.source === 'whatsapp') && (
                                                     <Tooltip title={`Enviado desde ${m.source === 'panel' ? 'el Panel' : 'el Dispositivo'}`}>
-                                                        <span>
-                                                            <Badge status="processing" text={m.source === 'panel' ? 'Panel' : 'Dispositivo'} style={{ fontSize: '9px', color: '#53bdeb' }} />
+                                                        <span style={{ 
+                                                            background: 'rgba(201, 162, 39, 0.15)', 
+                                                            padding: '2px 6px', 
+                                                            borderRadius: '4px',
+                                                            color: '#c9a227',
+                                                            fontSize: '9px'
+                                                        }}>
+                                                            {m.source === 'panel' ? '◈ Panel' : '◈ Dispositivo'}
                                                         </span>
                                                     </Tooltip>
                                                 )}
                                                 {new Date(m.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                                                {m.fromMe && <CheckCheck size={12} color="#53bdeb" />}
+                                                {m.fromMe && <CheckCheck size={12} color="#c9a227" />}
                                             </div>
                                         </div>
                                     </Dropdown>
@@ -1561,26 +1676,36 @@ export const ChatInterface = ({
                             </div>
                         </div>
 
-                        {/* Indicador de respuesta */}
+                        {/* Indicador de respuesta - estilo retro */}
                         {replyingTo && (
                             <div style={{ 
-                                background: '#1a2e35', 
-                                padding: '8px 12px',
-                                borderLeft: '4px solid #25D366',
+                                background: 'linear-gradient(90deg, rgba(201, 162, 39, 0.1) 0%, rgba(47, 38, 29, 0.95) 100%)', 
+                                padding: '10px 14px',
+                                borderLeft: '4px solid #c9a227',
                                 display: 'flex',
                                 justifyContent: 'space-between',
-                                alignItems: 'center'
+                                alignItems: 'center',
+                                borderTop: '1px solid rgba(201, 162, 39, 0.2)'
                             }}>
                                 <div style={{ flex: 1, overflow: 'hidden' }}>
-                                    <div style={{ color: '#25D366', fontSize: 12, fontWeight: 600 }}>
-                                        Respondiendo a {replyingTo.fromMe ? 'ti mismo' : (replyingTo.senderName || 'Contacto')}
+                                    <div style={{ 
+                                        color: '#c9a227', 
+                                        fontSize: 12, 
+                                        fontWeight: 700,
+                                        fontFamily: "'Playfair Display', Georgia, serif",
+                                        letterSpacing: '0.3px'
+                                    }}>
+                                        ↩ Respondiendo a {replyingTo.fromMe ? 'ti mismo' : (replyingTo.senderName || 'Contacto')}
                                     </div>
                                     <div style={{ 
-                                        color: '#8696a0', 
+                                        color: '#8b7b65', 
                                         fontSize: 11, 
                                         overflow: 'hidden', 
                                         textOverflow: 'ellipsis', 
-                                        whiteSpace: 'nowrap' 
+                                        whiteSpace: 'nowrap',
+                                        fontFamily: "'Crimson Text', Georgia, serif",
+                                        fontStyle: 'italic',
+                                        marginTop: 2
                                     }}>
                                         {replyingTo.text?.substring(0, 60) || (replyingTo.media ? '📎 Multimedia' : '...')}
                                         {replyingTo.text && replyingTo.text.length > 60 ? '...' : ''}
@@ -1589,14 +1714,22 @@ export const ChatInterface = ({
                                 <Button 
                                     type="text" 
                                     size="small"
-                                    icon={<X size={16} color="#8696a0" />} 
+                                    icon={<X size={16} color="#8b7b65" />} 
                                     onClick={cancelReply}
                                     style={{ marginLeft: 8 }}
                                 />
                             </div>
                         )}
 
-                        <div style={{ padding: '10px', background: '#202c33', display: 'flex', alignItems: 'center', gap: 10 }}>
+                        <div style={{ 
+                            padding: '12px 14px', 
+                            background: 'linear-gradient(180deg, #2f261d 0%, #2a2218 100%)', 
+                            display: 'flex', 
+                            alignItems: 'center', 
+                            gap: 12,
+                            borderTop: '2px solid',
+                            borderImage: 'linear-gradient(90deg, transparent, rgba(201, 162, 39, 0.3), transparent) 1'
+                        }}>
                             {isRecording ? (
                                 <>
                                     <Tooltip title="Cancelar grabación">
@@ -1611,19 +1744,26 @@ export const ChatInterface = ({
                                         flex: 1,
                                         display: 'flex',
                                         alignItems: 'center',
-                                        gap: 10,
-                                        background: '#2a3942',
-                                        padding: '10px 15px',
-                                        borderRadius: '8px'
+                                        gap: 12,
+                                        background: 'linear-gradient(145deg, #3d3225 0%, #2a2218 100%)',
+                                        padding: '12px 16px',
+                                        borderRadius: '8px',
+                                        border: '1px solid rgba(201, 162, 39, 0.2)'
                                     }}>
                                         <div style={{
                                             width: 12,
                                             height: 12,
                                             borderRadius: '50%',
-                                            background: '#ff4d4f',
-                                            animation: 'pulse 1.5s ease-in-out infinite'
+                                            background: 'linear-gradient(145deg, #cd7f32 0%, #b87333 100%)',
+                                            animation: 'pulse 1.5s ease-in-out infinite',
+                                            boxShadow: '0 0 10px rgba(205, 127, 50, 0.5)'
                                         }} />
-                                        <span style={{ color: '#e9edef', fontSize: '14px' }}>
+                                        <span style={{ 
+                                            color: '#f5e6c8', 
+                                            fontSize: '14px',
+                                            fontFamily: "'Source Serif Pro', Georgia, serif",
+                                            fontStyle: 'italic'
+                                        }}>
                                             Grabando... {Math.floor(recordingTime / 60)}:{(recordingTime % 60).toString().padStart(2, '0')}
                                         </span>
                                     </div>
@@ -1631,7 +1771,7 @@ export const ChatInterface = ({
                                         <Button
                                             type="text"
                                             onClick={stopRecording}
-                                            icon={<Send size={20} color="#25D366" />}
+                                            icon={<Send size={20} color="#c9a227" />}
                                         />
                                     </Tooltip>
                                 </>
@@ -1647,10 +1787,15 @@ export const ChatInterface = ({
                                     <Tooltip title="Adjuntar archivo">
                                         <Button
                                             type="text"
-                                            icon={<Paperclip size={20} color="#8696a0" />}
+                                            icon={<Paperclip size={20} color="#8b7b65" />}
                                             onClick={() => fileInputRef.current?.click()}
                                             loading={uploadingFile}
                                             disabled={uploadingFile}
+                                            style={{
+                                                background: 'linear-gradient(145deg, #3d3225 0%, #2a2218 100%)',
+                                                border: '1px solid rgba(201, 162, 39, 0.2)',
+                                                borderRadius: '8px'
+                                            }}
                                         />
                                     </Tooltip>
                                     <Input
@@ -1686,17 +1831,40 @@ export const ChatInterface = ({
                                             sendMessage();
                                         }}
                                         placeholder="Escribe un mensaje o usa /atajo + espacio"
-                                        style={{ borderRadius: '8px', background: '#2a3942', color: '#d1d7db', border: 'none', height: '40px' }}
+                                        style={{ 
+                                            borderRadius: '8px', 
+                                            background: 'linear-gradient(145deg, #1a1410 0%, #0f0c08 100%)', 
+                                            color: '#f5e6c8', 
+                                            border: '1px solid rgba(74, 61, 46, 0.6)', 
+                                            height: '42px',
+                                            fontFamily: "'Crimson Text', Georgia, serif",
+                                            fontSize: '14px'
+                                        }}
                                         disabled={uploadingFile}
                                     />
                                     {inputText ? (
-                                        <Button type="text" onClick={sendMessage} loading={loading} icon={<Send size={20} color="#25D366" />} />
+                                        <Button 
+                                            type="text" 
+                                            onClick={sendMessage} 
+                                            loading={loading} 
+                                            icon={<Send size={20} color="#c9a227" />}
+                                            style={{
+                                                background: 'linear-gradient(145deg, #4a7c59 0%, #2d4a35 100%)',
+                                                border: '1px solid rgba(74, 124, 89, 0.4)',
+                                                borderRadius: '8px'
+                                            }}
+                                        />
                                     ) : (
                                         <Tooltip title="Mantén presionado para grabar">
                                             <Button
                                                 type="text"
-                                                icon={<Mic size={20} color={uploadingFile ? "#8696a0" : "#25D366"} />}
+                                                icon={<Mic size={20} color={uploadingFile ? "#8b7b65" : "#c9a227"} />}
                                                 onClick={startRecording}
+                                                style={{
+                                                    background: 'linear-gradient(145deg, #3d3225 0%, #2a2218 100%)',
+                                                    border: '1px solid rgba(201, 162, 39, 0.2)',
+                                                    borderRadius: '8px'
+                                                }}
                                                 disabled={uploadingFile}
                                             />
                                         </Tooltip>

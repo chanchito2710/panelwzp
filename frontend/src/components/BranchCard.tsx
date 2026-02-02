@@ -7,68 +7,99 @@ import { upsertBranchChats } from '../services/branchChatDirectory.service';
 
 const { Text } = Typography;
 
-// Inyectar estilos de animación para las tarjetas de dispositivos
+// Inyectar estilos de animación RETRO para las tarjetas de dispositivos
 const injectBranchCardStyles = () => {
-    const styleId = 'branch-card-animations';
+    const styleId = 'branch-card-animations-retro';
     if (document.getElementById(styleId)) return;
     
     const style = document.createElement('style');
     style.id = styleId;
     style.textContent = `
-        /* Animación de zumbido/vibración para BranchCard */
+        /* === TEMA RETRO - Animaciones de BranchCard === */
+        
+        /* Animación de zumbido vintage */
         @keyframes branchCardBuzz {
-            0%, 100% { transform: translateY(-8px); }
-            10% { transform: translateY(-8px) translateX(-4px) rotate(-1deg); }
-            20% { transform: translateY(-8px) translateX(4px) rotate(1deg); }
+            0%, 100% { transform: translateY(-8px) rotate(-0.5deg); }
+            10% { transform: translateY(-8px) translateX(-4px) rotate(-1.5deg); }
+            20% { transform: translateY(-8px) translateX(4px) rotate(0.5deg); }
             30% { transform: translateY(-8px) translateX(-4px) rotate(-1deg); }
             40% { transform: translateY(-8px) translateX(4px) rotate(1deg); }
-            50% { transform: translateY(-8px) translateX(-2px); }
-            60% { transform: translateY(-8px) translateX(2px); }
+            50% { transform: translateY(-8px) translateX(-2px) rotate(-0.5deg); }
+            60% { transform: translateY(-8px) translateX(2px) rotate(0.5deg); }
             70% { transform: translateY(-8px) translateX(-1px); }
             80% { transform: translateY(-8px) translateX(1px); }
-            90% { transform: translateY(-8px); }
+            90% { transform: translateY(-8px) rotate(-0.5deg); }
         }
         
-        /* Animación de pulso de color */
+        /* Pulso dorado vintage */
         @keyframes branchCardPulse {
-            0%, 100% { box-shadow: 0 8px 25px rgba(0, 168, 132, 0.3); }
-            50% { box-shadow: 0 8px 35px rgba(0, 168, 132, 0.6), 0 0 20px rgba(37, 211, 102, 0.4); }
+            0%, 100% { box-shadow: 0 8px 32px rgba(201, 162, 39, 0.25); }
+            50% { box-shadow: 0 12px 40px rgba(201, 162, 39, 0.5), 0 0 30px rgba(232, 197, 71, 0.3); }
         }
         
-        /* Clase base para hover */
+        /* Brillo dorado deslizante */
+        @keyframes goldShine {
+            0% { left: -100%; }
+            50% { left: 100%; }
+            100% { left: 100%; }
+        }
+        
+        /* Clase base retro para hover */
         .branch-card-animated {
-            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
+            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1) !important;
+            position: relative !important;
+            overflow: hidden !important;
+        }
+        
+        .branch-card-animated::before {
+            content: '' !important;
+            position: absolute !important;
+            inset: 0 !important;
+            background: 
+                repeating-linear-gradient(
+                    0deg,
+                    transparent,
+                    transparent 2px,
+                    rgba(0, 0, 0, 0.02) 2px,
+                    rgba(0, 0, 0, 0.02) 4px
+                ) !important;
+            pointer-events: none !important;
+            z-index: 1 !important;
         }
         
         .branch-card-animated:hover {
-            transform: translateY(-8px) !important;
-            box-shadow: 0 12px 30px rgba(0, 168, 132, 0.25) !important;
+            transform: translateY(-8px) rotate(-0.5deg) !important;
+            box-shadow: 
+                0 16px 48px rgba(0, 0, 0, 0.5),
+                0 0 30px rgba(201, 162, 39, 0.2) !important;
+            border-color: rgba(201, 162, 39, 0.6) !important;
         }
         
-        /* Clase para notificación activa */
+        /* Clase para notificación activa - estilo vintage */
         .branch-card-notified {
             animation: branchCardBuzz 0.6s ease-in-out, branchCardPulse 1.5s ease-in-out !important;
-            border-color: #25D366 !important;
-            box-shadow: 0 8px 30px rgba(37, 211, 102, 0.4) !important;
+            border-color: #c9a227 !important;
+            box-shadow: 
+                0 12px 40px rgba(201, 162, 39, 0.4),
+                0 0 20px rgba(232, 197, 71, 0.2) !important;
         }
         
         .branch-card-notified::after {
             content: '';
             position: absolute;
             top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            border-radius: inherit;
-            background: linear-gradient(45deg, transparent, rgba(37, 211, 102, 0.1), transparent);
-            animation: shimmer 1s ease-in-out;
+            left: -100%;
+            width: 50%;
+            height: 100%;
+            background: linear-gradient(
+                90deg,
+                transparent,
+                rgba(201, 162, 39, 0.2),
+                transparent
+            );
+            animation: goldShine 1s ease-in-out;
             pointer-events: none;
-        }
-        
-        @keyframes shimmer {
-            0% { opacity: 0; }
-            50% { opacity: 1; }
-            100% { opacity: 0; }
+            z-index: 2;
         }
     `;
     document.head.appendChild(style);
@@ -191,45 +222,77 @@ export const BranchCard: React.FC<BranchCardProps> = ({ device, onOpenFull, onRe
             onClick={onOpenFull}
             className={`branch-card-animated ${isNotified ? 'branch-card-notified' : ''}`}
             style={{
-                background: '#111b21',
-                borderColor: isNotified ? '#25D366' : (isConnected ? '#00a884' : '#3b4a54'),
+                background: 'linear-gradient(145deg, #2f261d 0%, #1a1410 100%)',
+                borderColor: isNotified ? '#c9a227' : (isConnected ? 'rgba(201, 162, 39, 0.5)' : 'rgba(74, 61, 46, 0.6)'),
                 borderWidth: isConnected ? 2 : 1,
                 cursor: 'pointer',
                 height: '100%',
                 display: 'flex',
                 flexDirection: 'column',
                 position: 'relative',
-                overflow: 'hidden'
+                overflow: 'hidden',
+                boxShadow: '0 8px 32px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(245, 230, 200, 0.03)'
             }}
             styles={{ body: { padding: 0, flex: 1, display: 'flex', flexDirection: 'column' } }}
         >
-            {/* Header */}
+            {/* Header Vintage */}
             <div style={{
-                padding: '10px 12px',
-                background: isConnected ? '#00a884' : isReconnecting ? '#1a5f4a' : '#202c33',
-                borderBottom: '1px solid #222e35',
+                padding: '12px 14px',
+                background: isConnected 
+                    ? 'linear-gradient(145deg, #4a7c59 0%, #2d4a35 100%)' 
+                    : isReconnecting 
+                        ? 'linear-gradient(145deg, #3d5a45 0%, #2a3d30 100%)' 
+                        : 'linear-gradient(145deg, #3d3225 0%, #2a2218 100%)',
+                borderBottom: '2px solid',
+                borderImage: 'linear-gradient(90deg, transparent, rgba(201, 162, 39, 0.4), transparent) 1',
                 display: 'flex',
                 justifyContent: 'space-between',
                 alignItems: 'center'
             }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                     {isReconnecting ? (
                         <Spin size="small" />
                     ) : (
-                        <Badge status={isConnected ? 'success' : 'default'} />
+                        <div style={{
+                            width: 10,
+                            height: 10,
+                            borderRadius: '50%',
+                            background: isConnected 
+                                ? 'linear-gradient(145deg, #c9a227 0%, #8b7015 100%)'
+                                : '#5a4d3d',
+                            boxShadow: isConnected 
+                                ? '0 0 10px rgba(201, 162, 39, 0.5), 0 0 0 2px rgba(201, 162, 39, 0.2)'
+                                : 'inset 0 1px 2px rgba(0, 0, 0, 0.3)'
+                        }} />
                     )}
                     <div>
                         <div onClick={(e) => e.stopPropagation()}>
-                            <Text strong style={{ color: '#fff', fontSize: 13 }} editable={nameEditable}>
+                            <Text 
+                                strong 
+                                style={{ 
+                                    color: '#f5e6c8', 
+                                    fontSize: 14,
+                                    fontFamily: "'Playfair Display', Georgia, serif",
+                                    letterSpacing: '0.3px',
+                                    textShadow: '0 1px 2px rgba(0, 0, 0, 0.3)'
+                                }} 
+                                editable={nameEditable}
+                            >
                                 {device.name}
                             </Text>
                         </div>
-                        <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.7)' }}>
+                        <div style={{ 
+                            fontSize: 10, 
+                            color: 'rgba(245, 230, 200, 0.7)',
+                            fontFamily: "'Source Serif Pro', Georgia, serif",
+                            fontStyle: 'italic',
+                            letterSpacing: '0.5px'
+                        }}>
                             {isConnected 
-                                ? (device.phoneNumber || device.number || 'Conectado')
+                                ? (device.phoneNumber || device.number || '• Conectado')
                                 : isReconnecting
-                                    ? 'Reconectando...'
-                                    : device.status === 'QR_READY' ? 'Escanear QR' : 'Sin vincular'
+                                    ? '• Reconectando...'
+                                    : device.status === 'QR_READY' ? '• Escanear QR' : '• Sin vincular'
                             }
                         </div>
                     </div>
@@ -248,7 +311,8 @@ export const BranchCard: React.FC<BranchCardProps> = ({ device, onOpenFull, onRe
                                 <div style={{ 
                                     transform: isPinned ? 'rotate(45deg)' : 'rotate(0deg)', 
                                     transition: 'transform 0.2s',
-                                    color: isConnected ? '#fff' : (isPinned ? '#00a884' : '#8696a0') 
+                                    color: isPinned ? '#c9a227' : '#8b7b65',
+                                    textShadow: isPinned ? '0 0 8px rgba(201, 162, 39, 0.5)' : 'none'
                                 }}>
                                     📌
                                 </div>
@@ -261,15 +325,20 @@ export const BranchCard: React.FC<BranchCardProps> = ({ device, onOpenFull, onRe
                         <Badge
                             count={totalUnread}
                             size="small"
-                            style={{ backgroundColor: '#00a884', boxShadow: '0 0 0 1px #111b21' }}
+                            style={{ 
+                                background: 'linear-gradient(145deg, #cd7f32 0%, #b87333 100%)',
+                                boxShadow: '0 2px 8px rgba(205, 127, 50, 0.4)',
+                                fontFamily: "'Source Serif Pro', Georgia, serif",
+                                fontWeight: 600
+                            }}
                         />
                     )}
                     <div onClick={(e) => e.stopPropagation()}>{headerActions}</div>
                 </div>
             </div>
 
-            {/* Chats Preview */}
-            <div style={{ flex: 1, overflow: 'hidden' }}>
+            {/* Chats Preview - Estilo Vintage */}
+            <div style={{ flex: 1, overflow: 'hidden', background: 'rgba(26, 20, 16, 0.4)' }}>
                 {!isConnected ? (
                     <div style={{ 
                         height: '100%', 
@@ -277,11 +346,13 @@ export const BranchCard: React.FC<BranchCardProps> = ({ device, onOpenFull, onRe
                         flexDirection: 'column',
                         alignItems: 'center', 
                         justifyContent: 'center',
-                        color: isReconnecting ? '#25D366' : '#8696a0',
+                        color: isReconnecting ? '#c9a227' : '#8b7b65',
                         fontSize: 12,
                         padding: 20,
                         textAlign: 'center',
-                        gap: 8
+                        gap: 8,
+                        fontFamily: "'Crimson Text', Georgia, serif",
+                        fontStyle: 'italic'
                     }}>
                         {isReconnecting ? (
                             <>
@@ -299,8 +370,10 @@ export const BranchCard: React.FC<BranchCardProps> = ({ device, onOpenFull, onRe
                         display: 'flex', 
                         alignItems: 'center', 
                         justifyContent: 'center',
-                        color: '#8696a0',
-                        fontSize: 12
+                        color: '#8b7b65',
+                        fontSize: 12,
+                        fontFamily: "'Crimson Text', Georgia, serif",
+                        fontStyle: 'italic'
                     }}>
                         Sin chats recientes
                     </div>
@@ -310,25 +383,45 @@ export const BranchCard: React.FC<BranchCardProps> = ({ device, onOpenFull, onRe
                         dataSource={chats}
                         renderItem={chat => (
                             <List.Item style={{ 
-                                padding: '6px 10px', 
-                                borderBottom: '1px solid #222e35',
-                                background: 'transparent'
+                                padding: '8px 12px', 
+                                borderBottom: '1px solid rgba(74, 61, 46, 0.4)',
+                                background: 'transparent',
+                                transition: 'background 0.2s ease'
                             }}>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%' }}>
-                                    <Avatar size="small" shape="square" src={chat.profilePhotoUrl ? assetUrl(chat.profilePhotoUrl) : undefined} style={{ backgroundColor: chat.isGroup ? '#25D366' : '#6a7175', flexShrink: 0 }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%' }}>
+                                    <Avatar 
+                                        size="small" 
+                                        shape="circle" 
+                                        src={chat.profilePhotoUrl ? assetUrl(chat.profilePhotoUrl) : undefined} 
+                                        style={{ 
+                                            backgroundColor: chat.isGroup ? '#4a7c59' : '#5a4d3d',
+                                            border: '2px solid rgba(201, 162, 39, 0.3)',
+                                            boxShadow: '0 2px 8px rgba(0, 0, 0, 0.3)',
+                                            flexShrink: 0,
+                                            fontFamily: "'Playfair Display', Georgia, serif",
+                                            fontWeight: 700
+                                        }}
+                                    >
                                         {chat.name.substring(0, 1).toUpperCase()}
                                     </Avatar>
                                     <div style={{ flex: 1, overflow: 'hidden' }}>
                                         <div style={{ 
-                                            fontSize: 11, 
-                                            color: '#e9edef',
+                                            fontSize: 12, 
+                                            color: '#f5e6c8',
                                             overflow: 'hidden',
                                             textOverflow: 'ellipsis',
-                                            whiteSpace: 'nowrap'
+                                            whiteSpace: 'nowrap',
+                                            fontFamily: "'Crimson Text', Georgia, serif",
+                                            fontWeight: 600
                                         }}>
                                             {chat.name}
                                         </div>
-                                        <div style={{ fontSize: 9, color: '#8696a0' }}>
+                                        <div style={{ 
+                                            fontSize: 10, 
+                                            color: '#8b7b65',
+                                            fontFamily: "'Source Serif Pro', Georgia, serif",
+                                            fontStyle: 'italic'
+                                        }}>
                                             {new Date(chat.lastMessageTime).toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit' })}
                                         </div>
                                     </div>
@@ -339,11 +432,11 @@ export const BranchCard: React.FC<BranchCardProps> = ({ device, onOpenFull, onRe
                 )}
             </div>
 
-            {/* Footer */}
+            {/* Footer Vintage */}
             <div style={{
-                padding: '8px 10px',
-                background: '#202c33',
-                borderTop: '1px solid #222e35',
+                padding: '10px 12px',
+                background: 'linear-gradient(180deg, rgba(47, 38, 29, 0.8) 0%, rgba(42, 34, 24, 0.9) 100%)',
+                borderTop: '1px solid rgba(201, 162, 39, 0.2)',
                 display: 'flex',
                 justifyContent: 'center'
             }}>
@@ -351,7 +444,14 @@ export const BranchCard: React.FC<BranchCardProps> = ({ device, onOpenFull, onRe
                     type="text" 
                     size="small"
                     icon={<Maximize2 size={14} />}
-                    style={{ color: '#00a884', fontSize: 11 }}
+                    style={{ 
+                        color: '#c9a227', 
+                        fontSize: 11,
+                        fontFamily: "'Source Serif Pro', Georgia, serif",
+                        fontWeight: 600,
+                        letterSpacing: '0.5px',
+                        textTransform: 'uppercase'
+                    }}
                 >
                     Abrir completo
                 </Button>
