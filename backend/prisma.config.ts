@@ -10,7 +10,7 @@ export default defineConfig({
     datasource: {
         // Prisma (v7) exige un string no-vacío para algunos comandos (p.ej. migrate diff).
         // En Railway siempre debe setearse DATABASE_URL. Este fallback es solo para dev/local.
-        url: process.env.DATABASE_URL ?? 'mysql://root:root@localhost:3306/panelwzp'
+        url: process.env.DATABASE_URL ?? 'mysql://user:pass@localhost:3306/panelwzp'
     }
 });
 
