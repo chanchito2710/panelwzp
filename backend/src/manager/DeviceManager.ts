@@ -1964,7 +1964,7 @@ export class DeviceManager {
                     where: { deviceId },
                     orderBy: { lastMessageAt: 'desc' }
                 });
-                return rows.map((c) => ({
+                return rows.map((c: any) => ({
                     id: c.waChatId,
                     name: String(c.name || '').trim() || c.waChatId.split('@')[0],
                     lastMessageTime: c.lastMessageAt ? new Date(c.lastMessageAt).getTime() : Date.now(),
@@ -2162,7 +2162,7 @@ export class DeviceManager {
                 return msgs
                     .slice()
                     .reverse()
-                    .map((m) => {
+                    .map((m: any) => {
                         let parsed: any = null;
                         try {
                             parsed = m.rawJson ? JSON.parse(m.rawJson) : null;
@@ -2357,7 +2357,7 @@ export class DeviceManager {
                 include: { chat: { select: { waChatId: true, name: true } } }
             });
 
-            return msgs.map((m) => {
+            return msgs.map((m: any) => {
                 const waChatId = m.chat?.waChatId || (chatRow?.waChatId ?? '');
                 const chatName = String(m.chat?.name || chatRow?.name || '').trim() || waChatId.split('@')[0];
                 const text = String(m.text || '');
