@@ -916,6 +916,19 @@ export const ChatInterface = ({
         />
     );
 
+    // Estado RECONNECTING - Auto-reconectando sesión guardada
+    if (currentDevice.status === 'RECONNECTING') {
+        return (
+            <div style={{ padding: 40, textAlign: 'center', height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center' }}>
+                <Spin size="large" />
+                <h2 style={{ color: '#e9edef', marginTop: 20 }}>{currentDevice.name}</h2>
+                <p style={{ color: '#25D366', fontSize: 16 }}>Reconectando sesión guardada...</p>
+                <p style={{ color: '#8696a0', fontSize: 13 }}>Esto puede tomar unos segundos</p>
+                {settingsModalContent}
+            </div>
+        );
+    }
+
     if (currentDevice.status === 'DISCONNECTED' || currentDevice.status === 'CONNECTING' || currentDevice.status === 'PAIRING_CODE_READY') {
         const statusLabel =
             currentDevice.status === 'CONNECTING'

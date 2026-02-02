@@ -196,7 +196,7 @@ interface Device {
     id: string;
     name: string;
     phoneNumber: string | null;
-    status: 'CONNECTED' | 'DISCONNECTED' | 'QR_READY' | 'CONNECTING' | 'PAIRING_CODE_READY';
+    status: 'CONNECTED' | 'DISCONNECTED' | 'QR_READY' | 'CONNECTING' | 'PAIRING_CODE_READY' | 'RECONNECTING';
     qr: string | null;
 }
 
@@ -237,6 +237,46 @@ export class DeviceManager {
         ensureDir(this.messagesDbRoot);
         this.loadData();
         this.initRetentionJob();
+        // Auto-reconectar dispositivos con sesión guardada al iniciar
+        this.autoReconnectOnStartup();
+    }
+
+    private async autoReconnectOnStartup() {
+        // Primero, marcar todos los dispositivos con sesión guardada como "RECONNECTING"
+        // para que el frontend muestre un estado apropiado
+        for (const device of this.devices) {
+            const authPath = dbPath('auth', device.id);
+            const credsPath = path.join(authPath, 'creds.json');
+            if (fs.existsSync(credsPath)) {
+                // Marcar como reconectando inmediatamente
+                this.updateDevice(device.id, { status: 'RECONNECTING', qr: null });
+                console.log(`[${device.id}] Sesión guardada detectada, marcado como RECONNECTING`);
+            }
+        }
+        
+        // Esperar un poco para que el servidor termine de iniciar
+        await new Promise(resolve => setTimeout(resolve, 1500));
+        
+        // Ahora iniciar las reconexiones
+        for (const device of this.devices) {
+            const authPath = dbPath('auth', device.id);
+            const credsPath = path.join(authPath, 'creds.json');
+            if (fs.existsSync(credsPath)) {
+                console.log(`[${device.id}] Iniciando auto-reconexión...`);
+                try {
+                    void this.initDevice(device.id, 'qr').catch(err => {
+                        console.log(`[${device.id}] Error en auto-reconexión: ${err?.message || err}`);
+                        // Si falla, volver a DISCONNECTED
+                        this.updateDevice(device.id, { status: 'DISCONNECTED', qr: null });
+                    });
+                    // Esperar un poco entre reconexiones para no saturar
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+                } catch (err) {
+                    console.log(`[${device.id}] Error iniciando auto-reconexión:`, err);
+                    this.updateDevice(device.id, { status: 'DISCONNECTED', qr: null });
+                }
+            }
+        }
     }
 
     private async dbUpsertDeviceRecord(device: { id: string; name: string; status?: string; qr?: string | null; phoneNumber?: string | null; number?: string | null }) {
@@ -478,11 +518,12 @@ export class DeviceManager {
         const canonicalId = resolveCanonicalChatId(store, chatId);
         if (!canonicalId || canonicalId.endsWith('@g.us')) return;
 
-        const key = chatKeyOf(canonicalId);
-        if (!key) return;
+        // Usar canonicalId completo para evitar mezclar fotos entre chats
+        // (antes usaba chatKey que podía ser compartido entre LID y número)
+        const uniqueKey = canonicalId;
 
         const inFlight = this.avatarFetchInFlight.get(deviceId) || new Set<string>();
-        if (inFlight.has(key)) return;
+        if (inFlight.has(uniqueKey)) return;
 
         const ttlMs = 7 * 24 * 60 * 60 * 1000;
         const cached = store.profilePhotos.get(canonicalId);
@@ -496,13 +537,14 @@ export class DeviceManager {
             return;
         }
 
-        inFlight.add(key);
+        inFlight.add(uniqueKey);
         this.avatarFetchInFlight.set(deviceId, inFlight);
         this.avatarFetchLastAt.set(deviceId, now);
 
         void (async () => {
             try {
-                const fileName = `${crypto.createHash('sha1').update(key).digest('hex')}.jpg`;
+                // Hash del canonicalId completo para nombre de archivo único
+                const fileName = `${crypto.createHash('sha1').update(canonicalId).digest('hex')}.jpg`;
                 const dir = path.join(DB_ROOT, 'storage', 'avatars', deviceId);
                 ensureDir(dir);
                 const filePath = path.join(dir, fileName);
@@ -530,7 +572,7 @@ export class DeviceManager {
             } catch {} finally {
                 const s = this.avatarFetchInFlight.get(deviceId);
                 if (s) {
-                    s.delete(key);
+                    s.delete(uniqueKey);
                     if (s.size === 0) this.avatarFetchInFlight.delete(deviceId);
                 }
             }
@@ -1984,8 +2026,8 @@ export class DeviceManager {
         const canonicalId = resolveCanonicalChatId(store, chatId);
         if (!canonicalId) throw new Error('Chat inválido');
 
-        const key = chatKeyOf(canonicalId);
-        const fileName = `${crypto.createHash('sha1').update(key).digest('hex')}.jpg`;
+        // Usar canonicalId completo para evitar mezclar fotos
+        const fileName = `${crypto.createHash('sha1').update(canonicalId).digest('hex')}.jpg`;
         const dir = path.join(DB_ROOT, 'storage', 'avatars', deviceId);
         ensureDir(dir);
         const filePath = path.join(dir, fileName);

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Card, Badge, Avatar, List, Typography, Button } from 'antd';
+import { Card, Badge, Avatar, List, Typography, Button, Spin } from 'antd';
 import { MessageSquare, Maximize2 } from 'lucide-react';
 import { useSocket } from '../hooks/useSocket';
 import { apiFetch, assetUrl } from '../lib/runtime';
@@ -97,6 +97,7 @@ export const BranchCard: React.FC<BranchCardProps> = ({ device, onOpenFull, onRe
     }, [socket, device.id]);
 
     const isConnected = device.status === 'CONNECTED';
+    const isReconnecting = device.status === 'RECONNECTING';
     const nameEditable = onRename
         ? {
             onChange: (value: string) => onRename(value),
@@ -124,14 +125,18 @@ export const BranchCard: React.FC<BranchCardProps> = ({ device, onOpenFull, onRe
             {/* Header */}
             <div style={{
                 padding: '10px 12px',
-                background: isConnected ? '#00a884' : '#202c33',
+                background: isConnected ? '#00a884' : isReconnecting ? '#1a5f4a' : '#202c33',
                 borderBottom: '1px solid #222e35',
                 display: 'flex',
                 justifyContent: 'space-between',
                 alignItems: 'center'
             }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <Badge status={isConnected ? 'success' : 'default'} />
+                    {isReconnecting ? (
+                        <Spin size="small" />
+                    ) : (
+                        <Badge status={isConnected ? 'success' : 'default'} />
+                    )}
                     <div>
                         <div onClick={(e) => e.stopPropagation()}>
                             <Text strong style={{ color: '#fff', fontSize: 13 }} editable={nameEditable}>
@@ -141,7 +146,9 @@ export const BranchCard: React.FC<BranchCardProps> = ({ device, onOpenFull, onRe
                         <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.7)' }}>
                             {isConnected 
                                 ? (device.phoneNumber || device.number || 'Conectado')
-                                : device.status === 'QR_READY' ? 'Escanear QR' : 'Sin vincular'
+                                : isReconnecting
+                                    ? 'Reconectando...'
+                                    : device.status === 'QR_READY' ? 'Escanear QR' : 'Sin vincular'
                             }
                         </div>
                     </div>
@@ -186,14 +193,21 @@ export const BranchCard: React.FC<BranchCardProps> = ({ device, onOpenFull, onRe
                     <div style={{ 
                         height: '100%', 
                         display: 'flex', 
+                        flexDirection: 'column',
                         alignItems: 'center', 
                         justifyContent: 'center',
-                        color: '#8696a0',
+                        color: isReconnecting ? '#25D366' : '#8696a0',
                         fontSize: 12,
                         padding: 20,
-                        textAlign: 'center'
+                        textAlign: 'center',
+                        gap: 8
                     }}>
-                        {device.status === 'QR_READY' 
+                        {isReconnecting ? (
+                            <>
+                                <Spin />
+                                <span>Reconectando sesión...</span>
+                            </>
+                        ) : device.status === 'QR_READY' 
                             ? 'Haz clic para escanear QR'
                             : 'Haz clic para conectar'
                         }
