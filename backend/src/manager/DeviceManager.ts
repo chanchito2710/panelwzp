@@ -33,6 +33,11 @@ interface SimpleStore {
     canonicalByKey: Map<string, string>;
     aliases: Map<string, string>;
     profilePhotos: Map<string, { url: string; updatedAt: number }>;
+    // Mapeo bidireccional LID <-> Phone para consistencia
+    lidToPhone: Map<string, string>; // LID -> número @s.whatsapp.net
+    phoneToLid: Map<string, string>; // número @s.whatsapp.net -> LID
+    // Cache de pushNames para evitar logs duplicados
+    lastPushName: Map<string, string>; // jid -> último pushName conocido
 }
 
 const stores: Map<string, SimpleStore> = new Map();
@@ -44,7 +49,10 @@ function createSimpleStore(): SimpleStore {
         contacts: new Map(),
         canonicalByKey: new Map(),
         aliases: new Map(),
-        profilePhotos: new Map()
+        profilePhotos: new Map(),
+        lidToPhone: new Map(),
+        phoneToLid: new Map(),
+        lastPushName: new Map()
     };
 }
 
@@ -62,6 +70,18 @@ function hasDeviceSuffix(chatId: string): boolean {
 
 function isLid(chatId: string): boolean {
     return String(chatId || '').endsWith('@lid');
+}
+
+// Registrar mapeo LID <-> Phone cuando lo detectamos
+function registerLidPhoneMapping(store: SimpleStore, lid: string, phone: string) {
+    if (!lid || !phone || !isLid(lid) || isLid(phone)) return;
+    const existingPhone = store.lidToPhone.get(lid);
+    const existingLid = store.phoneToLid.get(phone);
+    if (existingPhone === phone && existingLid === lid) return; // Ya mapeado
+    
+    store.lidToPhone.set(lid, phone);
+    store.phoneToLid.set(phone, lid);
+    console.log(`[LID-MAP] Registrado: ${lid} <-> ${phone}`);
 }
 
 function preferredChatId(a: string, b: string): string {
@@ -133,8 +153,28 @@ function mergeChatData(store: SimpleStore, fromId: string, toId: string) {
 function resolveCanonicalChatId(store: SimpleStore | undefined, chatId: string): string {
     if (!store || !chatId) return chatId;
 
+    // 1. Verificar alias directo
     const direct = store.aliases.get(chatId);
     if (direct) return direct;
+
+    // 2. Para LIDs, verificar si tenemos el número de teléfono mapeado
+    if (isLid(chatId)) {
+        const phoneNumber = store.lidToPhone.get(chatId);
+        if (phoneNumber && store.chats.has(phoneNumber)) {
+            store.aliases.set(chatId, phoneNumber);
+            return phoneNumber;
+        }
+    }
+    
+    // 3. Para números de teléfono, verificar si tenemos el LID mapeado y preferir el número
+    if (!isLid(chatId) && chatId.endsWith('@s.whatsapp.net')) {
+        const lid = store.phoneToLid.get(chatId);
+        if (lid && store.chats.has(lid) && !store.chats.has(chatId)) {
+            // El chat existe con LID pero no con número, migrar al número
+            mergeChatData(store, lid, chatId);
+            return chatId;
+        }
+    }
 
     const key = chatKeyOf(chatId);
     if (!key) return chatId;
@@ -274,8 +314,10 @@ export class DeviceManager {
             const waMessageId = args.waMessageId ? String(args.waMessageId) : '';
             if (!waMessageId) return;
 
-            await prisma.message.create({
-                data: {
+            // Usar upsert para evitar duplicados y actualizar si ya existe
+            await prisma.message.upsert({
+                where: { waMessageId },
+                create: {
                     deviceId,
                     chatId: chat.id,
                     waMessageId,
@@ -287,10 +329,16 @@ export class DeviceManager {
                     timestamp: new Date(Number(args.lastMessageAtMs || Date.now())),
                     status: 'sent',
                     rawJson: args.rawJson ? String(args.rawJson) : null
+                },
+                update: {
+                    // Solo actualizar campos que podrían cambiar (status, etc.)
+                    // No sobrescribir datos existentes
                 }
             });
         } catch (e: any) {
-            if (String(e?.code || '') === 'P2002') return;
+            // Silenciar errores de constraint (por si acaso)
+            const code = String(e?.code || '');
+            if (code === 'P2002' || code === 'P2025') return;
         }
     }
 
@@ -1393,13 +1441,27 @@ export class DeviceManager {
                     // Guardar pushName como nombre del contacto si existe
                     const pushName = (msg as any).pushName;
                     if (pushName && !msg.key.fromMe && unifiedChatId) {
+                        const lastKnown = store.lastPushName.get(unifiedChatId);
                         store.contacts.set(unifiedChatId, pushName);
-                        console.log(`[${deviceId}] pushName guardado: ${unifiedChatId} -> ${pushName}`);
+                        // Solo loguear si el nombre cambió (evita spam de logs)
+                        if (lastKnown !== pushName) {
+                            store.lastPushName.set(unifiedChatId, pushName);
+                            console.log(`[${deviceId}] Contacto actualizado: ${unifiedChatId} -> ${pushName}`);
+                        }
+                        
+                        // Mapeo bidireccional LID <-> Phone para consistencia futura
+                        if (isLid(unifiedChatId) && originalChatId !== unifiedChatId && !isLid(originalChatId)) {
+                            registerLidPhoneMapping(store, unifiedChatId, originalChatId);
+                        } else if (!isLid(unifiedChatId) && originalChatId !== unifiedChatId && isLid(originalChatId)) {
+                            registerLidPhoneMapping(store, originalChatId, unifiedChatId);
+                        }
                     }
 
-                    // Obtener nombre del contacto si existe
+                    // Obtener nombre del contacto si existe (buscar en ambos IDs)
                     const contactName = store.contacts.get(unifiedChatId) || 
                                        store.contacts.get(originalChatId) ||
+                                       (isLid(unifiedChatId) ? store.contacts.get(store.lidToPhone.get(unifiedChatId) || '') : null) ||
+                                       (!isLid(unifiedChatId) ? store.contacts.get(store.phoneToLid.get(unifiedChatId) || '') : null) ||
                                        pushName;
 
                     // Determinar el nombre del chat
