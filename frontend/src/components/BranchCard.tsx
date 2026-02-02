@@ -7,6 +7,73 @@ import { upsertBranchChats } from '../services/branchChatDirectory.service';
 
 const { Text } = Typography;
 
+// Inyectar estilos de animación para las tarjetas de dispositivos
+const injectBranchCardStyles = () => {
+    const styleId = 'branch-card-animations';
+    if (document.getElementById(styleId)) return;
+    
+    const style = document.createElement('style');
+    style.id = styleId;
+    style.textContent = `
+        /* Animación de zumbido/vibración para BranchCard */
+        @keyframes branchCardBuzz {
+            0%, 100% { transform: translateY(-8px); }
+            10% { transform: translateY(-8px) translateX(-4px) rotate(-1deg); }
+            20% { transform: translateY(-8px) translateX(4px) rotate(1deg); }
+            30% { transform: translateY(-8px) translateX(-4px) rotate(-1deg); }
+            40% { transform: translateY(-8px) translateX(4px) rotate(1deg); }
+            50% { transform: translateY(-8px) translateX(-2px); }
+            60% { transform: translateY(-8px) translateX(2px); }
+            70% { transform: translateY(-8px) translateX(-1px); }
+            80% { transform: translateY(-8px) translateX(1px); }
+            90% { transform: translateY(-8px); }
+        }
+        
+        /* Animación de pulso de color */
+        @keyframes branchCardPulse {
+            0%, 100% { box-shadow: 0 8px 25px rgba(0, 168, 132, 0.3); }
+            50% { box-shadow: 0 8px 35px rgba(0, 168, 132, 0.6), 0 0 20px rgba(37, 211, 102, 0.4); }
+        }
+        
+        /* Clase base para hover */
+        .branch-card-animated {
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
+        }
+        
+        .branch-card-animated:hover {
+            transform: translateY(-8px) !important;
+            box-shadow: 0 12px 30px rgba(0, 168, 132, 0.25) !important;
+        }
+        
+        /* Clase para notificación activa */
+        .branch-card-notified {
+            animation: branchCardBuzz 0.6s ease-in-out, branchCardPulse 1.5s ease-in-out !important;
+            border-color: #25D366 !important;
+            box-shadow: 0 8px 30px rgba(37, 211, 102, 0.4) !important;
+        }
+        
+        .branch-card-notified::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            border-radius: inherit;
+            background: linear-gradient(45deg, transparent, rgba(37, 211, 102, 0.1), transparent);
+            animation: shimmer 1s ease-in-out;
+            pointer-events: none;
+        }
+        
+        @keyframes shimmer {
+            0% { opacity: 0; }
+            50% { opacity: 1; }
+            100% { opacity: 0; }
+        }
+    `;
+    document.head.appendChild(style);
+};
+
 interface Device {
     id: string;
     name: string;
@@ -38,7 +105,14 @@ export const BranchCard: React.FC<BranchCardProps> = ({ device, onOpenFull, onRe
     const socket = useSocket();
     const [chats, setChats] = useState<Chat[]>([]);
     const [totalUnread, setTotalUnread] = useState(0);
+    const [isNotified, setIsNotified] = useState(false);
     const chatsRef = useRef<Chat[]>([]);
+    
+    // Inyectar estilos de animación
+    useEffect(() => {
+        injectBranchCardStyles();
+    }, []);
+    
     useEffect(() => {
         chatsRef.current = chats;
     }, [chats]);
@@ -78,6 +152,10 @@ export const BranchCard: React.FC<BranchCardProps> = ({ device, onOpenFull, onRe
         const handleNewMessage = (data: any) => {
             if (data.deviceId === device.id && !data.msg.fromMe) {
                 setTotalUnread(prev => prev + 1);
+                
+                // Activar animación de notificación
+                setIsNotified(true);
+                setTimeout(() => setIsNotified(false), 1500);
             }
         };
 
@@ -111,14 +189,17 @@ export const BranchCard: React.FC<BranchCardProps> = ({ device, onOpenFull, onRe
         <Card
             hoverable
             onClick={onOpenFull}
+            className={`branch-card-animated ${isNotified ? 'branch-card-notified' : ''}`}
             style={{
                 background: '#111b21',
-                borderColor: isConnected ? '#00a884' : '#3b4a54',
+                borderColor: isNotified ? '#25D366' : (isConnected ? '#00a884' : '#3b4a54'),
                 borderWidth: isConnected ? 2 : 1,
                 cursor: 'pointer',
                 height: '100%',
                 display: 'flex',
-                flexDirection: 'column'
+                flexDirection: 'column',
+                position: 'relative',
+                overflow: 'hidden'
             }}
             styles={{ body: { padding: 0, flex: 1, display: 'flex', flexDirection: 'column' } }}
         >
