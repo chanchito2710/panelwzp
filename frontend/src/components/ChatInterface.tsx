@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Layout, List, Input, Avatar, Space, Button, Badge, Typography, Tooltip, Modal, Spin, Empty, Popconfirm, message, Radio, Divider, notification } from 'antd';
-import { Search, Send, Paperclip, Mic, CheckCheck, X, Trash2, Settings, Play, PhoneCall, Image, Video, FileText, Camera } from 'lucide-react';
+import { Search, Send, Paperclip, Mic, CheckCheck, X, Trash2, Settings, Play, PhoneCall, Image, Video, FileText, Camera, Sticker } from 'lucide-react';
 import QRCode from 'react-qr-code';
 import { useSocket } from '../hooks/useSocket';
 import { apiFetch, assetUrl } from '../lib/runtime';
@@ -137,13 +137,35 @@ export const ChatInterface = ({
         ) : null;
 
         // Si es un grupo, mostrar ícono de grupo
-        if (chat.isGroup && !chat.lastMessage && !chat.lastMessageMedia) {
+        if (chat.isGroup && !chat.lastMessage && !chat.lastMessageMedia && !chat.lastMessageType) {
             return <span>👥 Grupo</span>;
+        }
+
+        // Verificar si es un sticker por el tipo de mensaje
+        if (chat.lastMessageType === 'stickerMessage' || chat.lastMessage === 'Sticker') {
+            return (
+                <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                    {prefix}
+                    <span style={{ fontSize: 16 }}>🎭</span>
+                    <span>Sticker</span>
+                </span>
+            );
         }
 
         // Si hay media
         if (chat.lastMessageMedia?.mimeType) {
             const mimeType = chat.lastMessageMedia.mimeType.toLowerCase();
+            
+            // Sticker (image/webp generalmente)
+            if (mimeType === 'image/webp' && !chat.lastMessage) {
+                return (
+                    <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                        {prefix}
+                        <span style={{ fontSize: 16 }}>🎭</span>
+                        <span>Sticker</span>
+                    </span>
+                );
+            }
             
             if (mimeType.startsWith('audio/')) {
                 const duration = formatAudioDuration(chat.lastMessageMedia.duration);
@@ -190,6 +212,16 @@ export const ChatInterface = ({
 
         // Mensaje de texto normal
         if (chat.lastMessage) {
+            // Verificar si es un sticker por el texto
+            if (chat.lastMessage === 'Sticker') {
+                return (
+                    <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                        {prefix}
+                        <span style={{ fontSize: 16 }}>🎭</span>
+                        <span>Sticker</span>
+                    </span>
+                );
+            }
             return (
                 <span style={{ display: 'flex', alignItems: 'center' }}>
                     {prefix}
@@ -201,7 +233,7 @@ export const ChatInterface = ({
         }
 
         // Sin mensaje - mostrar tipo de chat
-        return <span>{chat.isGroup ? '👥 Grupo' : 'Chat'}</span>;
+        return <span style={{ fontStyle: 'italic' }}>{chat.isGroup ? '👥 Grupo' : 'Sin mensajes'}</span>;
     };
 
     useEffect(() => {
