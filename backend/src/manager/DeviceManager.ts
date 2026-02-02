@@ -23,7 +23,9 @@ import { ensureDir } from '../config/ensureDir';
 import { markIncomingMessage } from '../auth/statsStore';
 import { getPrisma } from '../db/prisma';
 
-const logger = pino({ level: 'info' });
+// Logger silencioso para Baileys (evita spam de logs de conexión/stream)
+// En producción solo mostrar errores, en desarrollo mostrar warnings
+const logger = pino({ level: 'error' });
 
 // Store simple en memoria para chats, mensajes y contactos
 interface SimpleStore {

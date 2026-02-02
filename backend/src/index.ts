@@ -1008,8 +1008,22 @@ io.use((socket, next) => {
     next();
 });
 
+// Contador de conexiones activas (evita spam de logs)
+let activeConnections = 0;
+let lastConnectionLog = 0;
+
 io.on('connection', (socket) => {
-    console.log('Client connected');
+    activeConnections++;
+    const now = Date.now();
+    // Solo loguear cada 30 segundos como máximo
+    if (now - lastConnectionLog > 30000) {
+        console.log(`[WS] Conexiones activas: ${activeConnections}`);
+        lastConnectionLog = now;
+    }
+    
+    socket.on('disconnect', () => {
+        activeConnections--;
+    });
 });
 
 export const startBackend = (port: number = 5000) => {
