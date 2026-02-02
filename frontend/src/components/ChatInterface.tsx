@@ -110,6 +110,93 @@ export const ChatInterface = ({
     const searchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
     const notificationAudioCtxRef = useRef<AudioContext | null>(null);
     const lastNotificationSoundKeyRef = useRef<string>('');
+    
+    // Estado para trackear chats con notificación activa (para animación de zumbido)
+    const [notifiedChats, setNotifiedChats] = useState<Set<string>>(new Set());
+
+    // Inyectar estilos de animación para las tarjetas de chat
+    useEffect(() => {
+        const styleId = 'chat-card-animations';
+        if (document.getElementById(styleId)) return;
+        
+        const style = document.createElement('style');
+        style.id = styleId;
+        style.textContent = `
+            /* Animación de zumbido/vibración */
+            @keyframes chatBuzz {
+                0%, 100% { transform: translateX(0); }
+                10% { transform: translateX(-3px) rotate(-1deg); }
+                20% { transform: translateX(3px) rotate(1deg); }
+                30% { transform: translateX(-3px) rotate(-1deg); }
+                40% { transform: translateX(3px) rotate(1deg); }
+                50% { transform: translateX(-2px); }
+                60% { transform: translateX(2px); }
+                70% { transform: translateX(-1px); }
+                80% { transform: translateX(1px); }
+                90% { transform: translateX(0); }
+            }
+            
+            /* Animación de pulso de color */
+            @keyframes chatPulse {
+                0% { background: linear-gradient(90deg, #1a3a2a 0%, #0d2818 50%, #1a3a2a 100%); }
+                25% { background: linear-gradient(90deg, #25D366 0%, #1a3a2a 50%, #25D366 100%); }
+                50% { background: linear-gradient(90deg, #1a3a2a 0%, #25D366 50%, #1a3a2a 100%); }
+                75% { background: linear-gradient(90deg, #25D366 0%, #1a3a2a 50%, #25D366 100%); }
+                100% { background: linear-gradient(90deg, #1a3a2a 0%, #0d2818 50%, #1a3a2a 100%); }
+            }
+            
+            /* Clase para chat con notificación */
+            .chat-item-notified {
+                animation: chatBuzz 0.6s ease-in-out, chatPulse 1.5s ease-in-out;
+                box-shadow: 0 0 15px rgba(37, 211, 102, 0.4), inset 0 0 10px rgba(37, 211, 102, 0.1);
+                border-left: 3px solid #25D366 !important;
+            }
+            
+            /* Hover para tarjetas de chat */
+            .chat-item-card {
+                transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+                position: relative;
+                overflow: hidden;
+            }
+            
+            .chat-item-card::before {
+                content: '';
+                position: absolute;
+                top: 0;
+                left: -100%;
+                width: 100%;
+                height: 100%;
+                background: linear-gradient(90deg, transparent, rgba(37, 211, 102, 0.1), transparent);
+                transition: left 0.5s ease;
+            }
+            
+            .chat-item-card:hover::before {
+                left: 100%;
+            }
+            
+            .chat-item-card:hover {
+                background: #202c33 !important;
+                transform: scale(1.01);
+                box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+            }
+            
+            .chat-item-card:active {
+                transform: scale(0.99);
+            }
+            
+            /* Avatar hover efecto */
+            .chat-item-card:hover .ant-avatar {
+                transform: scale(1.05);
+                transition: transform 0.2s ease;
+            }
+        `;
+        document.head.appendChild(style);
+        
+        return () => {
+            const existing = document.getElementById(styleId);
+            if (existing) existing.remove();
+        };
+    }, []);
 
     useEffect(() => {
         chatsRef.current = chats;
@@ -536,7 +623,9 @@ export const ChatInterface = ({
 
                 const incomingKey = getChatKey(data.chatId);
                 const activeKey = getChatKey(activeChat);
-                if (incomingKey && activeKey && incomingKey === activeKey) {
+                const isSameChat = incomingKey && activeKey && incomingKey === activeKey;
+                
+                if (isSameChat) {
                     if (activeChat && data.chatId && data.chatId !== activeChat) {
                         setActiveChat(data.chatId);
                     }
@@ -548,6 +637,21 @@ export const ChatInterface = ({
                     if (scrollRef.current) {
                         scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
                     }
+                }
+
+                // Activar animación de zumbido si NO es el chat activo y NO es mensaje enviado por mí
+                if (!isSameChat && !data.msg.fromMe) {
+                    const chatIdToNotify = data.chatId;
+                    setNotifiedChats(prev => new Set(prev).add(chatIdToNotify));
+                    
+                    // Remover la notificación después de que termine la animación (1.5s)
+                    setTimeout(() => {
+                        setNotifiedChats(prev => {
+                            const newSet = new Set(prev);
+                            newSet.delete(chatIdToNotify);
+                            return newSet;
+                        });
+                    }, 1500);
                 }
 
                 // Actualizar lista de chats - unificar solo por clave segura (evita mezclar LIDs/grupos)
@@ -1152,8 +1256,14 @@ export const ChatInterface = ({
                     ) : (
                         <List
                             dataSource={chats}
-                            renderItem={chat => (
+                            renderItem={chat => {
+                                const isNotified = notifiedChats.has(chat.id) || 
+                                    Array.from(notifiedChats).some(nid => getChatKey(nid) === getChatKey(chat.id));
+                                const isActive = activeChat === chat.id;
+                                
+                                return (
                                 <List.Item
+                                    className={`chat-item-card ${isNotified ? 'chat-item-notified' : ''}`}
                                     onClick={() => {
                                         console.log('Chat seleccionado:', chat.id);
                                         setActiveChat(chat.id);
@@ -1161,13 +1271,19 @@ export const ChatInterface = ({
                                         setChats(prev => prev.map(c => 
                                             c.id === chat.id ? { ...c, unreadCount: 0 } : c
                                         ));
+                                        // Remover notificación al hacer click
+                                        setNotifiedChats(prev => {
+                                            const newSet = new Set(prev);
+                                            newSet.delete(chat.id);
+                                            return newSet;
+                                        });
                                     }}
                                     style={{
                                         padding: '12px 15px',
                                         borderBottom: '1px solid #222e35',
                                         cursor: 'pointer',
-                                        background: activeChat === chat.id ? '#2a3942' : 'transparent',
-                                        transition: 'background 0.2s'
+                                        background: isActive ? '#2a3942' : 'transparent',
+                                        borderLeft: isActive ? '3px solid #25D366' : '3px solid transparent'
                                     }}
                                 >
                                     <List.Item.Meta
@@ -1219,7 +1335,8 @@ export const ChatInterface = ({
                                         }
                                     />
                                 </List.Item>
-                            )}
+                                );
+                            }}
                         />
                     )}
                 </div>
