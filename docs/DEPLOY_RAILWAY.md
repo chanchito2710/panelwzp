@@ -21,7 +21,6 @@ Este documento describe el proceso completo para desplegar este proyecto en Rail
 - `OWNER_USERNAME`: usuario del propietario (ej: `admin`)
 - `OWNER_PASSWORD`: contraseña del propietario (fuerte). No se cambia desde la UI
 - `OWNER_EMAIL` (opcional): email del propietario (para referencia)
-- `OWNER_TOTP_SECRET` (opcional): secreto TOTP del propietario (si se gestiona por env)
 - `APP_AUTH_SECRET`: secreto largo (32+ chars)
 - `APP_TOKEN_TTL_MS` (opcional): expiración del token (default 8h)
 - `APP_SESSION_IDLE_TTL_MS` (opcional): expiración por inactividad (default 24h)
@@ -39,7 +38,7 @@ Persistencia:
   - `storage/` (archivos)
   - `auth/<deviceId>/` (sesiones Baileys)
   - `messages/` (base propia del panel: backup de mensajes por sucursal)
-  - `security/owner.json` (estado OWNER: 2FA/emergency lock/token version)
+  - `security/owner.json` (estado OWNER: emergency lock/token version)
   - `security/users.json` (usuarios ADMIN/USER)
   - `security/sessions.json` (sesiones del panel)
   - `security/audit.log` (logs inmutables de seguridad)
@@ -95,7 +94,7 @@ Notas:
    - `VITE_SOCKET_URL=https://TU_BACKEND.up.railway.app`
 4. En **Settings** configurar comandos:
    - **Build Command**: `npm ci --include=dev && npm run build`
-   - **Start Command**: `npm run preview -- --host 0.0.0.0 --port $PORT`
+   - **Start Command**: `npm start`
 5. Hacer **Redeploy** del frontend.
 6. En **Settings → Networking** del frontend:
    - **Generate Domain**
@@ -105,7 +104,6 @@ Notas:
 
 1. Abrir la URL del frontend.
 2. Loguear con `OWNER_USERNAME`/`OWNER_PASSWORD`.
-3. Ir a **🔒 Seguridad** y configurar 2FA (obligatorio para OWNER y ADMINS).
 3. Crear una sucursal/dispositivo (o usar uno existente).
 4. Iniciar dispositivo → ver QR → escanear desde WhatsApp:
    - WhatsApp → Dispositivos vinculados → Vincular un dispositivo → escanear.

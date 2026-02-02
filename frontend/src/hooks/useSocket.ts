@@ -5,10 +5,20 @@ import { getAuthToken } from '../lib/auth';
 
 export const useSocket = () => {
     const [socket, setSocket] = useState<Socket | null>(null);
+    const [token, setToken] = useState(() => getAuthToken());
+
+    useEffect(() => {
+        const id = window.setInterval(() => {
+            const next = getAuthToken();
+            setToken((prev) => (prev === next ? prev : next));
+        }, 1000);
+        return () => {
+            window.clearInterval(id);
+        };
+    }, []);
 
     useEffect(() => {
         const url = SOCKET_URL || API_BASE || undefined;
-        const token = getAuthToken();
         if (!token) {
             setSocket(null);
             return;
@@ -19,7 +29,7 @@ export const useSocket = () => {
         return () => {
             newSocket.close();
         };
-    }, [API_BASE, SOCKET_URL, getAuthToken()]);
+    }, [API_BASE, SOCKET_URL, token]);
 
     return socket;
 };

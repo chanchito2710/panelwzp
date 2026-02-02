@@ -1296,6 +1296,7 @@ export const ChatInterface = ({
                                                     if (template) {
                                                         e.preventDefault();
                                                         setInputText(template.content);
+                                                        void apiFetch(`/api/templates/${template.id}/use`, { method: 'POST' }).catch(() => {});
                                                         return;
                                                     }
                                                 }

@@ -20,6 +20,7 @@ import cron from 'node-cron';
 import { encryptSensitiveFields, decryptSensitiveFields } from '../utils/crypto';
 import { DB_ROOT, dbPath } from '../config/paths';
 import { ensureDir } from '../config/ensureDir';
+import { markIncomingMessage } from '../auth/statsStore';
 
 const logger = pino({ level: 'info' });
 
@@ -1324,6 +1325,7 @@ export class DeviceManager {
                 const source = this.resolveSource(deviceId, unifiedChatId, msg.key.id ?? undefined, text, timestamp, fromMe);
 
                 console.log(`[${deviceId}] Mensaje ${fromMe ? 'enviado' : 'recibido'}: ${text?.substring(0, 50) || '[media]'}`);
+                if (!fromMe) markIncomingMessage(deviceId, unifiedChatId, timestamp);
 
                 // Guardar en el store simple (store ya fue obtenido arriba)
                 if (store) {
