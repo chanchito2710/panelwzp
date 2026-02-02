@@ -21,29 +21,49 @@ import { hashPassword, validatePasswordPolicy, verifyPassword } from './auth/pas
 import { buildOtpauthUrl, generateTotpSecret, verifyTotpCode } from './auth/totp';
 import { appendAuditEvent, readAuditTail } from './auth/auditLog';
 
+const normalizeOrigin = (origin: string) => origin.trim().replace(/\/+$/, '');
+
 const parseAllowedOrigins = (): string[] | '*' | null => {
     const raw = String(process.env.APP_CORS_ORIGINS || '').trim();
     if (!raw) return null;
     if (raw === '*') return '*';
-    const parts = raw.split(',').map((s) => s.trim()).filter(Boolean);
+    const parts = raw
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean)
+        .map(normalizeOrigin);
     return Array.from(new Set(parts));
 };
 
 const allowedOrigins = parseAllowedOrigins();
-const corsOptions: CorsOptions = allowedOrigins === '*' || !allowedOrigins
-    ? { origin: '*' }
-    : {
-        origin: (origin, cb) => {
-            if (!origin) return cb(null, true);
-            if ((allowedOrigins as string[]).includes(origin)) return cb(null, true);
-            return cb(new Error('CORS_NOT_ALLOWED'), false);
-        }
-    };
+const isOriginAllowed = (origin: string | undefined) => {
+    if (allowedOrigins === '*' || !allowedOrigins) return true;
+    if (!origin) return true; // same-origin / server-to-server / non-browser
+    const o = normalizeOrigin(origin);
+    return (allowedOrigins as string[]).includes(o);
+};
+
+const corsOptions: CorsOptions = {
+    origin: (origin, cb) => {
+        if (isOriginAllowed(origin || undefined)) return cb(null, true);
+        return cb(new Error('CORS_NOT_ALLOWED'), false);
+    },
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+    optionsSuccessStatus: 204
+};
 
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
-    cors: { origin: allowedOrigins === '*' || !allowedOrigins ? '*' : allowedOrigins }
+    cors: {
+        origin: (origin, cb) => {
+            if (isOriginAllowed(origin || undefined)) return cb(null, true);
+            return cb(new Error('CORS_NOT_ALLOWED'), false);
+        },
+        methods: ['GET', 'POST'],
+        allowedHeaders: ['Content-Type', 'Authorization']
+    }
 });
 
 const notifyOwner = (event: any) => {
@@ -64,6 +84,7 @@ const upload = multer({
 });
 
 app.use(cors(corsOptions));
+app.options('*', cors(corsOptions));
 app.use(express.json());
 ensureDir(DB_ROOT);
 app.use('/storage', express.static(path.join(DB_ROOT, 'storage')));
