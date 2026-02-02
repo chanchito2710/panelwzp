@@ -1500,10 +1500,12 @@ export class DeviceManager {
                 console.log(`[${deviceId}] Mensaje ${fromMe ? 'enviado' : 'recibido'}: ${text?.substring(0, 50) || '[media]'}`);
                 if (!fromMe) markIncomingMessage(deviceId, unifiedChatId, timestamp);
 
+                // Obtener pushName (nombre del contacto en WhatsApp)
+                const pushName = (msg as any).pushName || null;
+
                 // Guardar en el store simple (store ya fue obtenido arriba)
                 if (store) {
                     // Guardar pushName como nombre del contacto si existe
-                    const pushName = (msg as any).pushName;
                     
                     // IMPORTANTE: Solo guardar pushName para el ID ORIGINAL del mensaje
                     // No para el unifiedChatId si son diferentes (evita mezclar nombres)
@@ -1567,6 +1569,10 @@ export class DeviceManager {
                     if (!store.messages.has(unifiedChatId)) {
                         store.messages.set(unifiedChatId, []);
                     }
+                    
+                    // Obtener senderName (pushName del remitente) para mensajes recibidos
+                    const senderName = !fromMe ? (pushName || null) : null;
+                    
                     const stored = {
                         key: msg.key,
                         message: msg.message,
@@ -1576,7 +1582,8 @@ export class DeviceManager {
                         timestamp,
                         media: mediaMetadata,
                         location,
-                        source
+                        source,
+                        senderName
                     };
                     store.messages.get(unifiedChatId)!.push(stored);
                     this.persistStoredMessage(deviceId, unifiedChatId, stored, existingChat?.name || chatName, contactName || null);
@@ -1599,7 +1606,11 @@ export class DeviceManager {
                         mediaPath: mediaMetadata?.url || null,
                         rawJson: (() => {
                             try {
-                                return JSON.stringify({ media: mediaMetadata || null, location: location || null });
+                                return JSON.stringify({ 
+                                    media: mediaMetadata || null, 
+                                    location: location || null,
+                                    senderName: !fromMe ? (pushName || null) : null
+                                });
                             } catch {
                                 return null;
                             }
@@ -1620,7 +1631,8 @@ export class DeviceManager {
                         timestamp,
                         media: mediaMetadata,
                         location,
-                        source
+                        source,
+                        senderName: !fromMe ? (pushName || null) : null
                     }
                 });
             }
@@ -1814,7 +1826,7 @@ export class DeviceManager {
         throw lastError || new Error('Error al generar código');
     }
 
-    public async sendMessage(deviceId: string, chatId: string, text: string) {
+    public async sendMessage(deviceId: string, chatId: string, text: string, quotedMessageId?: string) {
         const sock = this.sessions.get(deviceId);
         if (!sock) throw new Error('Device not connected');
 
@@ -1829,7 +1841,24 @@ export class DeviceManager {
 
         try {
             this.rememberPanelSend(deviceId, targetJid, { text, timestamp: Date.now() });
-            const result = await sock.sendMessage(targetJid, { text });
+            
+            // Construir mensaje con posible quote
+            const messageContent: any = { text };
+            
+            // Si hay quotedMessageId, buscar el mensaje original y agregar contextInfo
+            if (quotedMessageId && store) {
+                const originalMsg = this.findMessageById(deviceId, canonicalChatId, quotedMessageId);
+                if (originalMsg) {
+                    messageContent.contextInfo = {
+                        quotedMessage: originalMsg.message,
+                        stanzaId: quotedMessageId,
+                        participant: originalMsg.key?.participant || originalMsg.key?.remoteJid
+                    };
+                    console.log(`[${deviceId}] Respondiendo a mensaje ${quotedMessageId}`);
+                }
+            }
+            
+            const result = await sock.sendMessage(targetJid, messageContent);
             const msgId = result?.key?.id as string | undefined;
             if (msgId) this.rememberPanelSend(deviceId, targetJid, { id: msgId, text, timestamp: Date.now() });
             console.log(`[${deviceId}] Mensaje enviado, result:`, result?.key);
@@ -1838,6 +1867,21 @@ export class DeviceManager {
             console.error(`[${deviceId}] Error enviando mensaje:`, error);
             throw error;
         }
+    }
+    
+    // Buscar mensaje por ID en el store
+    private findMessageById(deviceId: string, chatId: string, messageId: string): any | null {
+        const store = stores.get(deviceId);
+        if (!store) return null;
+        
+        const messages = store.messages.get(chatId) || [];
+        for (const msg of messages) {
+            const id = msg.key?.id || msg.id;
+            if (id === messageId) {
+                return msg;
+            }
+        }
+        return null;
     }
 
     public async sendMedia(deviceId: string, chatId: string, fileBuffer: Buffer, mimeType: string, caption?: string, isVoiceNote: boolean = false) {
@@ -2377,6 +2421,7 @@ export class DeviceManager {
                         }
                         const media = parsed?.media || null;
                         const location = parsed?.location || null;
+                        const senderName = parsed?.senderName || null;
                         return {
                             id: m.waMessageId,
                             text: m.text ?? null,
@@ -2384,7 +2429,8 @@ export class DeviceManager {
                             timestamp: m.timestamp ? new Date(m.timestamp).getTime() : Date.now(),
                             source: (m.source as any) || (m.fromMe ? 'phone' : 'contact'),
                             media,
-                            location
+                            location,
+                            senderName
                         };
                     });
             }
@@ -2434,7 +2480,8 @@ export class DeviceManager {
                     timestamp: msg.timestamp || (msg.messageTimestamp ? Number(msg.messageTimestamp) * 1000 : Date.now()),
                     source: msg.source || ((msg.fromMe ?? msg.key?.fromMe) ? 'phone' : 'contact'),
                     media: msg.media || null,
-                    location
+                    location,
+                    senderName: msg.senderName || null
                 };
             });
         } catch (error) {

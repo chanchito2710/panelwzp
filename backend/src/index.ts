@@ -598,11 +598,16 @@ app.get('/api/devices/:id/messages/search', async (req, res) => {
 
 app.post('/api/devices/:id/chats/:chatId/send-text', async (req, res) => {
     try {
-        const { text } = req.body;
+        const { text, quotedMessageId } = req.body;
         const actor = (req as any).auth?.user;
-        const result = await deviceManager.sendMessage(req.params.id, req.params.chatId, text);
+        const result = await deviceManager.sendMessage(req.params.id, req.params.chatId, text, quotedMessageId);
         recordOutgoingMessage(actor?.id || '', req.params.id, req.params.chatId, Date.now());
-        audit(req, 'message_send_text', null, { deviceId: req.params.id, chatId: req.params.chatId, length: String(text || '').length });
+        audit(req, 'message_send_text', null, { 
+            deviceId: req.params.id, 
+            chatId: req.params.chatId, 
+            length: String(text || '').length,
+            isReply: Boolean(quotedMessageId)
+        });
         res.json({ success: true, result });
     } catch (error: any) {
         res.status(500).json({ error: error.message });

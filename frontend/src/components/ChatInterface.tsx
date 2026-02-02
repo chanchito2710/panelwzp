@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Layout, List, Input, Avatar, Space, Button, Badge, Typography, Tooltip, Modal, Spin, Empty, Popconfirm, message, Radio, Divider, notification } from 'antd';
+import { Layout, List, Input, Avatar, Space, Button, Badge, Typography, Tooltip, Modal, Spin, Empty, Popconfirm, message, Radio, Divider, notification, Dropdown } from 'antd';
+import { Reply, Copy } from 'lucide-react';
 import { Search, Send, Paperclip, Mic, CheckCheck, X, Trash2, Settings, Play, PhoneCall, Image, Video, FileText, Camera, Sticker } from 'lucide-react';
 import QRCode from 'react-qr-code';
 import { useSocket } from '../hooks/useSocket';
@@ -38,6 +39,12 @@ interface Message {
     source: 'panel' | 'whatsapp' | 'phone' | 'contact';
     media?: MediaMetadata | null;
     location?: { latitude: number; longitude: number; name?: string | null; address?: string | null } | null;
+    senderName?: string | null;  // Nombre del contacto de WhatsApp (pushName)
+    quotedMessage?: {            // Mensaje citado (reply)
+        id: string;
+        text: string | null;
+        senderName?: string | null;
+    } | null;
 }
 
 interface Chat {
@@ -113,6 +120,12 @@ export const ChatInterface = ({
     
     // Estado para trackear chats con notificación activa (para animación de zumbido)
     const [notifiedChats, setNotifiedChats] = useState<Set<string>>(new Set());
+    
+    // Estado para responder mensajes (reply/quote)
+    const [replyingTo, setReplyingTo] = useState<Message | null>(null);
+    
+    // Cancelar respuesta
+    const cancelReply = () => setReplyingTo(null);
 
     // Inyectar estilos de animación para las tarjetas de chat
     useEffect(() => {
@@ -788,7 +801,7 @@ export const ChatInterface = ({
             return;
         }
 
-        console.log('Enviando mensaje a:', activeChat, 'texto:', inputText);
+        console.log('Enviando mensaje a:', activeChat, 'texto:', inputText, replyingTo ? `(respondiendo a ${replyingTo.id})` : '');
         setLoading(true);
 
         try {
@@ -796,7 +809,10 @@ export const ChatInterface = ({
             const response = await apiFetch(`/api/devices/${device.id}/chats/${encodedChatId}/send-text`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ text: inputText })
+                body: JSON.stringify({ 
+                    text: inputText,
+                    quotedMessageId: replyingTo?.id || undefined
+                })
             });
 
             const result = await response.json();
@@ -806,6 +822,8 @@ export const ChatInterface = ({
                 // NO agregar mensaje localmente - el socket message:new lo hará
                 // Esto evita duplicación
                 setInputText('');
+                // Limpiar respuesta después de enviar
+                setReplyingTo(null);
             } else {
                 console.error('Error del servidor:', result.error);
             }
@@ -1310,6 +1328,8 @@ export const ChatInterface = ({
                                             newSet.delete(chat.id);
                                             return newSet;
                                         });
+                                        // Limpiar respuesta pendiente al cambiar de chat
+                                        setReplyingTo(null);
                                     }}
                                     style={{
                                         padding: '12px 15px',
@@ -1409,101 +1429,172 @@ export const ChatInterface = ({
                         >
                             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                                 {messages.map((m, i) => (
-                                    <div
+                                    <Dropdown
                                         key={m.id || i}
-                                        id={m.id ? `msg-${m.id}` : undefined}
-                                        style={{
-                                        alignSelf: m.fromMe ? 'flex-end' : 'flex-start',
-                                        background: m.fromMe ? (m.source === 'panel' ? '#005c4b' : '#1f3b2f') : '#202c33',
-                                        padding: '5px',
-                                        borderRadius: '8px',
-                                        color: '#e9edef',
-                                        maxWidth: '70%',
-                                        boxShadow: '0 1px 0.5px rgba(0,0,0,0.13)',
-                                        position: 'relative',
-                                        outline: highlightMsgId && m.id === highlightMsgId ? '2px solid #25D366' : undefined
-                                    }}
+                                        menu={{
+                                            items: [
+                                                { 
+                                                    key: 'reply', 
+                                                    label: 'Responder',
+                                                    icon: <span style={{ marginRight: 8 }}>↩️</span>,
+                                                    onClick: () => setReplyingTo(m) 
+                                                },
+                                                { 
+                                                    key: 'copy', 
+                                                    label: 'Copiar texto',
+                                                    icon: <span style={{ marginRight: 8 }}>📋</span>,
+                                                    onClick: () => {
+                                                        navigator.clipboard.writeText(m.text || '');
+                                                        messageApi.success('Texto copiado');
+                                                    },
+                                                    disabled: !m.text
+                                                }
+                                            ]
+                                        }}
+                                        trigger={['contextMenu']}
                                     >
-                                        {m.location && Number.isFinite(m.location.latitude) && Number.isFinite(m.location.longitude) && (
-                                            <div
-                                                style={{
-                                                    background: 'rgba(0,0,0,0.2)',
-                                                    padding: '10px 12px',
-                                                    borderRadius: 6,
-                                                    display: 'flex',
-                                                    flexDirection: 'column',
-                                                    gap: 6
-                                                }}
-                                            >
-                                                <div style={{ fontSize: '13px', fontWeight: 600 }}>📍 Ubicación</div>
-                                                {(m.location.name || m.location.address) && (
-                                                    <div style={{ fontSize: '12px', color: '#d1d7db' }}>
-                                                        {m.location.name && <div>{m.location.name}</div>}
-                                                        {m.location.address && <div style={{ color: '#8696a0' }}>{m.location.address}</div>}
-                                                    </div>
-                                                )}
-                                                <div style={{ fontSize: '11px', color: '#8696a0' }}>
-                                                    {m.location.latitude.toFixed(5)}, {m.location.longitude.toFixed(5)}
+                                        <div
+                                            id={m.id ? `msg-${m.id}` : undefined}
+                                            style={{
+                                                alignSelf: m.fromMe ? 'flex-end' : 'flex-start',
+                                                background: m.fromMe ? (m.source === 'panel' ? '#005c4b' : '#1f3b2f') : '#202c33',
+                                                padding: '5px',
+                                                borderRadius: '8px',
+                                                color: '#e9edef',
+                                                maxWidth: '70%',
+                                                boxShadow: '0 1px 0.5px rgba(0,0,0,0.13)',
+                                                position: 'relative',
+                                                outline: highlightMsgId && m.id === highlightMsgId ? '2px solid #25D366' : undefined,
+                                                cursor: 'context-menu'
+                                            }}
+                                        >
+                                            {/* Nombre del remitente para mensajes recibidos */}
+                                            {!m.fromMe && m.senderName && (
+                                                <div style={{ 
+                                                    fontSize: '12px', 
+                                                    fontWeight: 600, 
+                                                    color: '#25D366',
+                                                    padding: '2px 7px 4px 7px'
+                                                }}>
+                                                    {m.senderName}
                                                 </div>
-                                                <div>
-                                                    <a
-                                                        href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${m.location.latitude},${m.location.longitude}`)}`}
-                                                        target="_blank"
-                                                        rel="noreferrer"
-                                                        style={{ color: '#25D366', fontSize: '12px' }}
-                                                    >
-                                                        Abrir en Google Maps
-                                                    </a>
-                                                </div>
-                                            </div>
-                                        )}
-                                        {m.media && (
-                                            <div style={{ marginBottom: 5, borderRadius: 4, overflow: 'hidden' }}>
-                                                {m.media.mimeType.startsWith('image/') ? (
-                                                    <img
-                                                        src={assetUrl(m.media.url)}
-                                                        alt={m.media.fileName}
-                                                        style={{ maxWidth: '100%', maxHeight: 300, display: 'block', cursor: 'pointer' }}
-                                                        onClick={() => window.open(assetUrl(m.media?.url || ''))}
-                                                    />
-                                                ) : m.media.mimeType.startsWith('video/') ? (
-                                                    <video controls style={{ maxWidth: '100%', maxHeight: 300 }}>
-                                                        <source src={assetUrl(m.media.url)} type={m.media.mimeType} />
-                                                    </video>
-                                                ) : m.media.mimeType.startsWith('audio/') ? (
-                                                    <audio controls style={{ maxWidth: 250 }}>
-                                                        <source src={assetUrl(m.media.url)} type={m.media.mimeType} />
-                                                    </audio>
-                                                ) : (
-                                                    <div
-                                                        style={{ background: 'rgba(0,0,0,0.2)', padding: '10px 15px', borderRadius: 6, display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}
-                                                        onClick={() => window.open(assetUrl(m.media?.url || ''))}
-                                                    >
-                                                        <Paperclip size={20} />
-                                                        <div style={{ flex: 1, overflow: 'hidden' }}>
-                                                            <div style={{ fontSize: '13px', whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden' }}>{m.media.fileName}</div>
-                                                            <div style={{ fontSize: '11px', color: '#8696a0' }}>{(m.media.size / 1024).toFixed(1)} KB</div>
-                                                        </div>
-                                                    </div>
-                                                )}
-                                            </div>
-                                        )}
-                                        {m.text && <div style={{ padding: '3px 7px 0 7px' }}>{m.text}</div>}
-                                        <div style={{ fontSize: '10px', color: '#8696a0', textAlign: 'right', marginTop: 4, padding: '0 5px 2px 7px', display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 4 }}>
-                                            {(m.source === 'panel' || m.source === 'phone' || m.source === 'whatsapp') && (
-                                                <Tooltip title={`Enviado desde ${m.source === 'panel' ? 'el Panel' : 'el Dispositivo'}`}>
-                                                    <span>
-                                                        <Badge status="processing" text={m.source === 'panel' ? 'Panel' : 'Dispositivo'} style={{ fontSize: '9px', color: '#53bdeb' }} />
-                                                    </span>
-                                                </Tooltip>
                                             )}
-                                            {new Date(m.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                                            {m.fromMe && <CheckCheck size={12} color="#53bdeb" />}
+                                            {m.location && Number.isFinite(m.location.latitude) && Number.isFinite(m.location.longitude) && (
+                                                <div
+                                                    style={{
+                                                        background: 'rgba(0,0,0,0.2)',
+                                                        padding: '10px 12px',
+                                                        borderRadius: 6,
+                                                        display: 'flex',
+                                                        flexDirection: 'column',
+                                                        gap: 6
+                                                    }}
+                                                >
+                                                    <div style={{ fontSize: '13px', fontWeight: 600 }}>📍 Ubicación</div>
+                                                    {(m.location.name || m.location.address) && (
+                                                        <div style={{ fontSize: '12px', color: '#d1d7db' }}>
+                                                            {m.location.name && <div>{m.location.name}</div>}
+                                                            {m.location.address && <div style={{ color: '#8696a0' }}>{m.location.address}</div>}
+                                                        </div>
+                                                    )}
+                                                    <div style={{ fontSize: '11px', color: '#8696a0' }}>
+                                                        {m.location.latitude.toFixed(5)}, {m.location.longitude.toFixed(5)}
+                                                    </div>
+                                                    <div>
+                                                        <a
+                                                            href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${m.location.latitude},${m.location.longitude}`)}`}
+                                                            target="_blank"
+                                                            rel="noreferrer"
+                                                            style={{ color: '#25D366', fontSize: '12px' }}
+                                                        >
+                                                            Abrir en Google Maps
+                                                        </a>
+                                                    </div>
+                                                </div>
+                                            )}
+                                            {m.media && (
+                                                <div style={{ marginBottom: 5, borderRadius: 4, overflow: 'hidden' }}>
+                                                    {m.media.mimeType.startsWith('image/') ? (
+                                                        <img
+                                                            src={assetUrl(m.media.url)}
+                                                            alt={m.media.fileName}
+                                                            style={{ maxWidth: '100%', maxHeight: 300, display: 'block', cursor: 'pointer' }}
+                                                            onClick={() => window.open(assetUrl(m.media?.url || ''))}
+                                                        />
+                                                    ) : m.media.mimeType.startsWith('video/') ? (
+                                                        <video controls style={{ maxWidth: '100%', maxHeight: 300 }}>
+                                                            <source src={assetUrl(m.media.url)} type={m.media.mimeType} />
+                                                        </video>
+                                                    ) : m.media.mimeType.startsWith('audio/') ? (
+                                                        <audio controls style={{ maxWidth: 250 }}>
+                                                            <source src={assetUrl(m.media.url)} type={m.media.mimeType} />
+                                                        </audio>
+                                                    ) : (
+                                                        <div
+                                                            style={{ background: 'rgba(0,0,0,0.2)', padding: '10px 15px', borderRadius: 6, display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}
+                                                            onClick={() => window.open(assetUrl(m.media?.url || ''))}
+                                                        >
+                                                            <Paperclip size={20} />
+                                                            <div style={{ flex: 1, overflow: 'hidden' }}>
+                                                                <div style={{ fontSize: '13px', whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden' }}>{m.media.fileName}</div>
+                                                                <div style={{ fontSize: '11px', color: '#8696a0' }}>{(m.media.size / 1024).toFixed(1)} KB</div>
+                                                            </div>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            )}
+                                            {m.text && <div style={{ padding: '3px 7px 0 7px' }}>{m.text}</div>}
+                                            <div style={{ fontSize: '10px', color: '#8696a0', textAlign: 'right', marginTop: 4, padding: '0 5px 2px 7px', display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 4 }}>
+                                                {(m.source === 'panel' || m.source === 'phone' || m.source === 'whatsapp') && (
+                                                    <Tooltip title={`Enviado desde ${m.source === 'panel' ? 'el Panel' : 'el Dispositivo'}`}>
+                                                        <span>
+                                                            <Badge status="processing" text={m.source === 'panel' ? 'Panel' : 'Dispositivo'} style={{ fontSize: '9px', color: '#53bdeb' }} />
+                                                        </span>
+                                                    </Tooltip>
+                                                )}
+                                                {new Date(m.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                                {m.fromMe && <CheckCheck size={12} color="#53bdeb" />}
+                                            </div>
                                         </div>
-                                    </div>
+                                    </Dropdown>
                                 ))}
                             </div>
                         </div>
+
+                        {/* Indicador de respuesta */}
+                        {replyingTo && (
+                            <div style={{ 
+                                background: '#1a2e35', 
+                                padding: '8px 12px',
+                                borderLeft: '4px solid #25D366',
+                                display: 'flex',
+                                justifyContent: 'space-between',
+                                alignItems: 'center'
+                            }}>
+                                <div style={{ flex: 1, overflow: 'hidden' }}>
+                                    <div style={{ color: '#25D366', fontSize: 12, fontWeight: 600 }}>
+                                        Respondiendo a {replyingTo.fromMe ? 'ti mismo' : (replyingTo.senderName || 'Contacto')}
+                                    </div>
+                                    <div style={{ 
+                                        color: '#8696a0', 
+                                        fontSize: 11, 
+                                        overflow: 'hidden', 
+                                        textOverflow: 'ellipsis', 
+                                        whiteSpace: 'nowrap' 
+                                    }}>
+                                        {replyingTo.text?.substring(0, 60) || (replyingTo.media ? '📎 Multimedia' : '...')}
+                                        {replyingTo.text && replyingTo.text.length > 60 ? '...' : ''}
+                                    </div>
+                                </div>
+                                <Button 
+                                    type="text" 
+                                    size="small"
+                                    icon={<X size={16} color="#8696a0" />} 
+                                    onClick={cancelReply}
+                                    style={{ marginLeft: 8 }}
+                                />
+                            </div>
+                        )}
 
                         <div style={{ padding: '10px', background: '#202c33', display: 'flex', alignItems: 'center', gap: 10 }}>
                             {isRecording ? (
