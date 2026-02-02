@@ -15,11 +15,11 @@ import { requireAuth } from './auth/middleware';
 import { audit, requireRoleAtLeast } from './auth/middleware';
 import { createSession, findSession, listSessions, revokeAllSessions, revokeAllSessionsExcept, revokeAllSessionsForUser, revokeSession } from './auth/sessionStore';
 import { signAuthToken, verifyAuthToken } from './auth/authToken';
-import { getOwnerPassword, getOwnerTwoFactorSecret, getOwnerUser, isOwnerUsername, loadOwnerState, rotateOwnerTokenVersion, setEmergencyLock, setOwnerTwoFactorSecret } from './auth/ownerStore';
-import { createUser, findUserById, findUserByLogin, getUserPublic, getUserTwoFactorSecret, listUsers, rotateUserTokenVersion, setUserDisabled, setUserPasswordHash, setUserRole, setUserTwoFactorSecret } from './auth/userStore';
+import { getOwnerPassword, getOwnerUser, isOwnerUsername, loadOwnerState, setEmergencyLock } from './auth/ownerStore';
+import { createUser, deleteUser, findUserById, findUserByLogin, getUserPublic, listUsers, rotateUserTokenVersion, setUserDisabled, setUserPasswordHash, setUserRole } from './auth/userStore';
 import { hashPassword, validatePasswordPolicy, verifyPassword } from './auth/passwords';
-import { buildOtpauthUrl, generateTotpSecret, verifyTotpCode } from './auth/totp';
 import { appendAuditEvent, readAuditTail } from './auth/auditLog';
+import { buildUserStatsTable, recordOutgoingMessage, recordQuickReplyUse } from './auth/statsStore';
 
 const normalizeOrigin = (origin: string) => origin.trim().replace(/\/+$/, '');
 
@@ -91,7 +91,7 @@ app.use('/storage', express.static(path.join(DB_ROOT, 'storage')));
 
 app.post('/api/auth/login', async (req, res) => {
     try {
-        const { username, password, otp } = req.body || {};
+        const { username, password } = req.body || {};
         const login = String(username || '').trim();
         const pass = String(password || '');
         if (!login || !pass) return res.status(400).json({ error: 'Credenciales inválidas' });
@@ -104,10 +104,6 @@ app.post('/api/auth/login', async (req, res) => {
             if (!ownerPass) return res.status(500).json({ error: 'OWNER_PASSWORD no configurada' });
             if (pass !== ownerPass) {
                 return res.status(401).json({ error: 'Credenciales inválidas' });
-            }
-            const secret = getOwnerTwoFactorSecret();
-            if (secret && !verifyTotpCode(secret, String(otp || ''))) {
-                return res.status(401).json({ error: 'Código 2FA inválido', code: 'OTP_INVALID' });
             }
             const owner = getOwnerUser();
             const session = createSession(owner.id, ip, userAgent);
@@ -130,12 +126,6 @@ app.post('/api/auth/login', async (req, res) => {
         const okPass = await verifyPassword(pass, stored.passwordHash);
         if (!okPass) return res.status(401).json({ error: 'Credenciales inválidas' });
         const pub = getUserPublic(stored);
-        if (pub.role === 'ADMIN' && stored.twoFactorSecretEnc) {
-            const secret = getUserTwoFactorSecret(stored);
-            if (secret && !verifyTotpCode(secret, String(otp || ''))) {
-                return res.status(401).json({ error: 'Código 2FA inválido', code: 'OTP_INVALID' });
-            }
-        }
 
         const session = createSession(pub.id, ip, userAgent);
         const token = signAuthToken({ sub: pub.id, r: pub.role, sid: session.id, tv: pub.tokenVersion });
@@ -200,13 +190,86 @@ app.post('/api/auth/change-password', async (req, res) => {
 });
 
 app.get('/api/security/audit', requireRoleAtLeast('ADMIN'), (req, res) => {
+    const actor = (req as any).auth?.user as { role?: string } | undefined;
     const limitRaw = Number(req.query?.limit);
     const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(1000, Math.floor(limitRaw))) : 200;
-    res.json(readAuditTail(limit));
+    const events = readAuditTail(limit);
+    if (actor?.role === 'ADMIN') {
+        return res.json(events.filter((e) => e.actorUserId !== 'owner' && e.targetUserId !== 'owner' && e.actorRole !== 'OWNER'));
+    }
+    res.json(events);
+});
+
+app.get('/api/security/audit/query', requireRoleAtLeast('ADMIN'), (req, res) => {
+    const actor = (req as any).auth?.user as { role?: string } | undefined;
+    const includeOwner = actor?.role === 'OWNER';
+    const limitRaw = Number(req.query?.limit);
+    const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(10000, Math.floor(limitRaw))) : 2000;
+
+    const fromRaw = String(req.query?.from ?? '').trim();
+    const toRaw = String(req.query?.to ?? '').trim();
+    const actorUserId = String(req.query?.actorUserId ?? '').trim() || null;
+    const targetUserId = String(req.query?.targetUserId ?? '').trim() || null;
+    const actionQ = String(req.query?.action ?? '').trim().toLowerCase() || null;
+
+    const parseTs = (v: string) => {
+        if (!v) return null;
+        const n = Number(v);
+        if (Number.isFinite(n) && n > 0) return n;
+        const t = Date.parse(v);
+        return Number.isFinite(t) ? t : null;
+    };
+    const from = parseTs(fromRaw);
+    const to = parseTs(toRaw);
+
+    const usersIndex = new Map(listUsers().map((u) => [u.id, u] as const));
+    const owner = includeOwner ? getOwnerUser() : null;
+    const labelOf = (userId: string | null) => {
+        if (!userId) return null;
+        if (userId === 'owner' && owner) return { id: owner.id, username: owner.username, role: owner.role };
+        const u = usersIndex.get(userId);
+        if (u) return { id: u.id, username: u.username, role: u.role };
+        return { id: userId, username: userId, role: 'USER' };
+    };
+
+    let events = readAuditTail(limit);
+    if (!includeOwner) {
+        events = events.filter((e) => e.actorUserId !== 'owner' && e.targetUserId !== 'owner' && e.actorRole !== 'OWNER');
+    }
+    if (actorUserId) {
+        if (!includeOwner && actorUserId === 'owner') return res.json([]);
+        events = events.filter((e) => e.actorUserId === actorUserId);
+    }
+    if (targetUserId) {
+        if (!includeOwner && targetUserId === 'owner') return res.json([]);
+        events = events.filter((e) => e.targetUserId === targetUserId);
+    }
+    if (actionQ) {
+        events = events.filter((e) => String(e.action || '').toLowerCase().includes(actionQ));
+    }
+    if (from) {
+        events = events.filter((e) => Number(e.at || 0) >= from);
+    }
+    if (to) {
+        events = events.filter((e) => Number(e.at || 0) <= to);
+    }
+
+    const enriched = events.map((e) => ({
+        ...e,
+        actor: labelOf(e.actorUserId ?? null),
+        target: labelOf(e.targetUserId ?? null)
+    }));
+    res.json(enriched);
 });
 
 app.get('/api/security/users', requireRoleAtLeast('ADMIN'), (req, res) => {
     res.json({ users: listUsers() });
+});
+
+app.get('/api/security/stats/users', requireRoleAtLeast('ADMIN'), (req, res) => {
+    const actor = (req as any).auth?.user as { role?: string } | undefined;
+    const includeOwner = actor?.role === 'OWNER';
+    res.json({ users: buildUserStatsTable({ includeOwner }) });
 });
 
 app.post('/api/security/users', requireRoleAtLeast('ADMIN'), async (req, res) => {
@@ -215,6 +278,7 @@ app.post('/api/security/users', requireRoleAtLeast('ADMIN'), async (req, res) =>
         const { username, email, role, password } = req.body || {};
         const nextRole = String(role || 'USER').toUpperCase();
         if (nextRole === 'OWNER') return res.status(400).json({ error: 'No se puede crear OWNER' });
+        if (actor?.role === 'ADMIN' && nextRole !== 'USER') return res.status(403).json({ error: 'ADMIN solo puede crear usuarios USER' });
         if (nextRole === 'ADMIN' && actor?.role !== 'OWNER') return res.status(403).json({ error: 'Solo OWNER puede crear ADMIN' });
         const policy = validatePasswordPolicy(String(password || ''));
         if (!policy.ok) return res.status(400).json({ error: policy.error });
@@ -226,6 +290,40 @@ app.post('/api/security/users', requireRoleAtLeast('ADMIN'), async (req, res) =>
     } catch (error: any) {
         res.status(400).json({ error: error?.message || 'Error al crear usuario' });
     }
+});
+
+app.delete('/api/security/users/:id', requireRoleAtLeast('ADMIN'), (req, res) => {
+    try {
+        const actor = (req as any).auth?.user;
+        const targetId = String(req.params.id || '').trim();
+        if (!targetId) return res.status(400).json({ error: 'id requerido' });
+        if (targetId === 'owner') return res.status(403).json({ error: 'No permitido' });
+        const target = findUserById(targetId);
+        if (!target) return res.status(404).json({ error: 'Usuario no encontrado' });
+        if (actor?.role === 'ADMIN' && target.role !== 'USER') return res.status(403).json({ error: 'No permitido' });
+        const deleted = deleteUser(targetId);
+        if (!deleted) return res.status(404).json({ error: 'Usuario no encontrado' });
+        revokeAllSessionsForUser(targetId, actor?.id || null, 'user_deleted');
+        audit(req, 'user_deleted', targetId, { role: deleted.role });
+        notifyOwner({ action: 'user_deleted', userId: targetId, by: actor?.id || null, at: Date.now(), role: deleted.role });
+        res.json({ success: true });
+    } catch (error: any) {
+        res.status(400).json({ error: error?.message || 'Error al eliminar usuario' });
+    }
+});
+
+app.post('/api/security/users/:id/close-sessions', requireRoleAtLeast('ADMIN'), (req, res) => {
+    const actor = (req as any).auth?.user;
+    const targetId = String(req.params.id || '').trim();
+    if (!targetId) return res.status(400).json({ error: 'id requerido' });
+    if (targetId === 'owner') return res.status(403).json({ error: 'No permitido' });
+    const target = findUserById(targetId);
+    if (!target) return res.status(404).json({ error: 'Usuario no encontrado' });
+    revokeAllSessionsForUser(targetId, actor?.id || null, 'close_user_sessions');
+    rotateUserTokenVersion(targetId);
+    audit(req, 'close_user_sessions', targetId);
+    notifyOwner({ action: 'close_user_sessions', userId: targetId, by: actor?.id || null, at: Date.now() });
+    res.json({ success: true });
 });
 
 app.patch('/api/security/users/:id', requireRoleAtLeast('ADMIN'), (req, res) => {
@@ -287,18 +385,28 @@ app.get('/api/security/sessions', requireRoleAtLeast('USER'), (req, res) => {
     const filterUserId = targetUserId || null;
     if (actor?.role === 'USER') {
         const sessions = listSessions(actor.id);
-        return res.json({ sessions });
-    }
-    if (actor?.role === 'ADMIN' && filterUserId) {
-        const target = filterUserId === 'owner' ? null : findUserById(filterUserId);
-        if (!target) return res.status(404).json({ error: 'Usuario no encontrado' });
-        if (target.role !== 'USER' && actor.role !== 'OWNER') return res.status(403).json({ error: 'No permitido' });
+        return res.json({ sessions: sessions.map((s) => ({ ...s, user: { id: actor.id, username: actor.username, role: actor.role } })) });
     }
     if (actor?.role === 'ADMIN' && !filterUserId) {
         const sessions = listSessions().filter((s) => s.userId !== 'owner');
-        return res.json({ sessions });
+        const usersIndex = new Map(listUsers().map((u) => [u.id, u] as const));
+        return res.json({
+            sessions: sessions.map((s) => {
+                const u = usersIndex.get(s.userId);
+                return { ...s, user: u ? { id: u.id, username: u.username, role: u.role } : { id: s.userId, username: s.userId, role: 'USER' } };
+            })
+        });
     }
-    return res.json({ sessions: listSessions(filterUserId || undefined) });
+    const sessions = listSessions(filterUserId || undefined).filter((s) => (actor?.role === 'OWNER' ? true : s.userId !== 'owner'));
+    const usersIndex = new Map(listUsers().map((u) => [u.id, u] as const));
+    const owner = actor?.role === 'OWNER' ? getOwnerUser() : null;
+    return res.json({
+        sessions: sessions.map((s) => {
+            if (s.userId === 'owner' && owner) return { ...s, user: { id: owner.id, username: owner.username, role: owner.role } };
+            const u = usersIndex.get(s.userId);
+            return { ...s, user: u ? { id: u.id, username: u.username, role: u.role } : { id: s.userId, username: s.userId, role: 'USER' } };
+        })
+    });
 });
 
 app.post('/api/security/sessions/:id/revoke', requireRoleAtLeast('USER'), (req, res) => {
@@ -308,10 +416,6 @@ app.post('/api/security/sessions/:id/revoke', requireRoleAtLeast('USER'), (req, 
     if (!s) return res.status(404).json({ error: 'Sesión no encontrada' });
     if (actor?.role === 'USER' && s.userId !== actor.id) return res.status(403).json({ error: 'No permitido' });
     if (actor?.role === 'ADMIN' && s.userId === 'owner') return res.status(403).json({ error: 'No permitido' });
-    if (actor?.role === 'ADMIN') {
-        const targetUser = findUserById(s.userId);
-        if (targetUser && targetUser.role !== 'USER') return res.status(403).json({ error: 'No permitido' });
-    }
     revokeSession(sid, actor?.id || null, 'revoked');
     audit(req, 'session_revoked', s.userId, { sessionId: sid });
     res.json({ success: true });
@@ -345,68 +449,6 @@ app.post('/api/security/emergency-unlock', requireRoleAtLeast('OWNER'), (req, re
     res.json({ success: true });
 });
 
-app.post('/api/security/2fa/init', requireRoleAtLeast('USER'), (req, res) => {
-    const actor = (req as any).auth?.user;
-    const secret = generateTotpSecret();
-    const issuer = 'Panel WhatsApp Multi-Dispositivo';
-    const account = actor?.email || actor?.username || 'user';
-    const otpauthUrl = buildOtpauthUrl({ issuer, account, secretBase32: secret });
-    res.json({ secret, otpauthUrl });
-});
-
-app.post('/api/security/2fa/confirm', requireRoleAtLeast('USER'), async (req, res) => {
-    try {
-        const actor = (req as any).auth?.user;
-        const { secret, code, currentPassword } = req.body || {};
-        const secretBase32 = String(secret || '').trim();
-        const otp = String(code || '').trim();
-        if (!secretBase32) return res.status(400).json({ error: 'secret requerido' });
-        if (!verifyTotpCode(secretBase32, otp)) return res.status(400).json({ error: 'Código inválido' });
-
-        if (actor?.role === 'OWNER') {
-            if (String(currentPassword || '') !== getOwnerPassword()) return res.status(400).json({ error: 'Contraseña actual incorrecta' });
-            setOwnerTwoFactorSecret(secretBase32);
-            rotateOwnerTokenVersion();
-            revokeAllSessionsForUser('owner', 'owner', '2fa_enabled');
-            audit(req, '2fa_enabled', 'owner');
-            notifyOwner({ action: '2fa_enabled', userId: 'owner', by: 'owner', at: Date.now() });
-            return res.json({ success: true });
-        }
-
-        const stored = actor?.id ? findUserById(actor.id) : null;
-        if (!stored) return res.status(401).json({ error: 'No autorizado' });
-        const ok = await verifyPassword(String(currentPassword || ''), stored.passwordHash);
-        if (!ok) return res.status(400).json({ error: 'Contraseña actual incorrecta' });
-        setUserTwoFactorSecret(stored.id, secretBase32);
-        revokeAllSessionsForUser(stored.id, stored.id, '2fa_enabled');
-        audit(req, '2fa_enabled', stored.id);
-        notifyOwner({ action: '2fa_enabled', userId: stored.id, by: stored.id, at: Date.now() });
-        return res.json({ success: true });
-    } catch (error: any) {
-        res.status(500).json({ error: error?.message || 'Error al configurar 2FA' });
-    }
-});
-
-app.post('/api/security/2fa/disable', requireRoleAtLeast('OWNER'), async (req, res) => {
-    try {
-        const { userId, currentPassword, otp } = req.body || {};
-        if (String(currentPassword || '') !== getOwnerPassword()) return res.status(400).json({ error: 'Contraseña incorrecta' });
-        const ownerSecret = getOwnerTwoFactorSecret();
-        if (ownerSecret && !verifyTotpCode(ownerSecret, String(otp || ''))) return res.status(400).json({ error: 'Código 2FA inválido' });
-        const targetId = String(userId || '').trim();
-        const target = findUserById(targetId);
-        if (!target) return res.status(404).json({ error: 'Usuario no encontrado' });
-        if (target.role === 'ADMIN') return res.status(400).json({ error: '2FA es obligatorio para ADMIN. Demotear a USER antes.' });
-        setUserTwoFactorSecret(targetId, null);
-        revokeAllSessionsForUser(targetId, 'owner', '2fa_disabled');
-        audit(req, '2fa_disabled', targetId);
-        notifyOwner({ action: '2fa_disabled', userId: targetId, by: 'owner', at: Date.now() });
-        res.json({ success: true });
-    } catch (error: any) {
-        res.status(500).json({ error: error?.message || 'Error al desactivar 2FA' });
-    }
-});
-
 // REST Routes
 app.get('/api/devices', (req, res) => {
     try {
@@ -420,6 +462,7 @@ app.post('/api/devices', (req, res) => {
     try {
         const { name } = req.body;
         const device = deviceManager.createDevice(name);
+        audit(req, 'device_created', null, { deviceId: device?.id || null, name: String(name || '') });
         res.json(device);
     } catch (error: any) {
         res.status(400).json({ error: error?.message || 'Error al crear dispositivo' });
@@ -431,6 +474,7 @@ app.patch('/api/devices/:id', (req, res) => {
         const { name } = req.body;
         const updated = deviceManager.renameDevice(req.params.id, name);
         if (!updated) return res.status(404).json({ error: 'Dispositivo no encontrado' });
+        audit(req, 'device_renamed', null, { deviceId: req.params.id, name: String(name || '') });
         res.json(updated);
     } catch (error: any) {
         res.status(400).json({ error: error.message || 'Error al actualizar dispositivo' });
@@ -478,6 +522,7 @@ app.post('/api/devices/:id/disconnect-clean', async (req, res) => {
 app.delete('/api/devices/:id', async (req, res) => {
     try {
         const result = await deviceManager.deleteDevice(req.params.id);
+        audit(req, 'device_deleted', null, { deviceId: req.params.id });
         res.json(result);
     } catch (error: any) {
         res.status(500).json({ error: error.message });
@@ -538,7 +583,10 @@ app.get('/api/devices/:id/messages/search', async (req, res) => {
 app.post('/api/devices/:id/chats/:chatId/send-text', async (req, res) => {
     try {
         const { text } = req.body;
+        const actor = (req as any).auth?.user;
         const result = await deviceManager.sendMessage(req.params.id, req.params.chatId, text);
+        recordOutgoingMessage(actor?.id || '', req.params.id, req.params.chatId, Date.now());
+        audit(req, 'message_send_text', null, { deviceId: req.params.id, chatId: req.params.chatId, length: String(text || '').length });
         res.json({ success: true, result });
     } catch (error: any) {
         res.status(500).json({ error: error.message });
@@ -555,6 +603,7 @@ app.post('/api/devices/:id/chats/:chatId/send-media', upload.single('file'), asy
         const chatId = req.params.chatId as string;
         const { caption, isVoiceNote: isVoiceNoteRaw } = req.body;
         const isVoiceNote = isVoiceNoteRaw === 'true' || req.file.originalname?.includes('audio-nota-voz') || false;
+        const actor = (req as any).auth?.user;
         
         const result = await deviceManager.sendMedia(
             deviceId,
@@ -564,7 +613,8 @@ app.post('/api/devices/:id/chats/:chatId/send-media', upload.single('file'), asy
             caption || req.file.originalname || 'archivo',
             isVoiceNote
         );
-        
+        recordOutgoingMessage(actor?.id || '', deviceId, chatId, Date.now());
+        audit(req, 'message_send_media', null, { deviceId, chatId, size: req.file.size, mime: req.file.mimetype || null, isVoiceNote });
         res.json({ success: true, result });
     } catch (error: any) {
         res.status(500).json({ error: error.message });
@@ -647,6 +697,7 @@ app.get('/api/templates/category/:category', (req, res) => {
 app.post('/api/templates', (req, res) => {
     try {
         const template = templateManager.createTemplate(req.body);
+        audit(req, 'template_created', null, { templateId: template?.id || null });
         res.json(template);
     } catch (error: any) {
         res.status(500).json({ error: error.message });
@@ -659,6 +710,7 @@ app.put('/api/templates/:id', (req, res) => {
         if (!template) {
             return res.status(404).json({ error: 'Template not found' });
         }
+        audit(req, 'template_updated', null, { templateId: req.params.id });
         res.json(template);
     } catch (error: any) {
         res.status(500).json({ error: error.message });
@@ -671,6 +723,7 @@ app.delete('/api/templates/:id', (req, res) => {
         if (!success) {
             return res.status(404).json({ error: 'Template not found' });
         }
+        audit(req, 'template_deleted', null, { templateId: req.params.id });
         res.json({ success: true });
     } catch (error: any) {
         res.status(500).json({ error: error.message });
@@ -680,6 +733,9 @@ app.delete('/api/templates/:id', (req, res) => {
 app.post('/api/templates/:id/use', (req, res) => {
     try {
         templateManager.incrementUsage(req.params.id);
+        const actor = (req as any).auth?.user;
+        recordQuickReplyUse(actor?.id || '');
+        audit(req, 'template_used', null, { templateId: req.params.id });
         res.json({ success: true });
     } catch (error: any) {
         res.status(500).json({ error: error.message });
@@ -700,6 +756,7 @@ app.get('/api/labels', (req, res) => {
 app.post('/api/labels', (req, res) => {
     try {
         const label = labelManager.createLabel(req.body);
+        audit(req, 'label_created', null, { labelId: label?.id || null });
         res.json(label);
     } catch (error: any) {
         res.status(500).json({ error: error.message });
@@ -712,6 +769,7 @@ app.put('/api/labels/:id', (req, res) => {
         if (!label) {
             return res.status(404).json({ error: 'Label not found' });
         }
+        audit(req, 'label_updated', null, { labelId: req.params.id });
         res.json(label);
     } catch (error: any) {
         res.status(500).json({ error: error.message });
@@ -724,6 +782,7 @@ app.delete('/api/labels/:id', (req, res) => {
         if (!success) {
             return res.status(404).json({ error: 'Label not found' });
         }
+        audit(req, 'label_deleted', null, { labelId: req.params.id });
         res.json({ success: true });
     } catch (error: any) {
         res.status(500).json({ error: error.message });
@@ -746,6 +805,7 @@ app.delete('/api/devices/:deviceId/chats/:chatId', async (req, res) => {
         const { deviceId, chatId } = req.params;
         const success = await deviceManager.deleteChat(deviceId, chatId);
         if (!success) return res.status(404).json({ error: 'Chat not found' });
+        audit(req, 'chat_deleted', null, { deviceId, chatId });
         res.json({ success: true });
     } catch (error: any) {
         res.status(500).json({ error: error.message });
@@ -756,6 +816,7 @@ app.post('/api/devices/:deviceId/chats/:chatId/labels', (req, res) => {
     try {
         const { labelIds } = req.body;
         labelManager.assignLabels(req.params.deviceId, req.params.chatId, labelIds);
+        audit(req, 'chat_labels_assigned', null, { deviceId: req.params.deviceId, chatId: req.params.chatId, labelIds });
         res.json({ success: true });
     } catch (error: any) {
         res.status(500).json({ error: error.message });
@@ -765,6 +826,7 @@ app.post('/api/devices/:deviceId/chats/:chatId/labels', (req, res) => {
 app.post('/api/devices/:deviceId/chats/:chatId/labels/:labelId', (req, res) => {
     try {
         labelManager.addLabelToChat(req.params.deviceId, req.params.chatId, req.params.labelId);
+        audit(req, 'chat_label_added', null, { deviceId: req.params.deviceId, chatId: req.params.chatId, labelId: req.params.labelId });
         res.json({ success: true });
     } catch (error: any) {
         res.status(500).json({ error: error.message });
@@ -774,6 +836,7 @@ app.post('/api/devices/:deviceId/chats/:chatId/labels/:labelId', (req, res) => {
 app.delete('/api/devices/:deviceId/chats/:chatId/labels/:labelId', (req, res) => {
     try {
         labelManager.removeLabelFromChat(req.params.deviceId, req.params.chatId, req.params.labelId);
+        audit(req, 'chat_label_removed', null, { deviceId: req.params.deviceId, chatId: req.params.chatId, labelId: req.params.labelId });
         res.json({ success: true });
     } catch (error: any) {
         res.status(500).json({ error: error.message });
