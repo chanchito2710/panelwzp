@@ -608,6 +608,24 @@ export const WhatsAppPanelModal = ({ visible, onClose }: { visible: boolean, onC
                             );
                         })}
                     </div>
+                    {/* Firma/Lema */}
+                    <div style={{
+                        marginTop: 30,
+                        paddingTop: 20,
+                        borderTop: '1px solid rgba(212, 175, 55, 0.2)',
+                        textAlign: 'center',
+                        opacity: 0.7
+                    }}>
+                        <Text style={{ 
+                            fontFamily: '"Playfair Display", Georgia, serif',
+                            fontStyle: 'italic',
+                            fontSize: 13,
+                            color: '#d4af37',
+                            letterSpacing: '0.5px'
+                        }}>
+                            ✨ "Gracias Tincho, lo estás haciendo muy bien!" ✨
+                        </Text>
+                    </div>
                 </>
             )}
             <PairingCodeModal
