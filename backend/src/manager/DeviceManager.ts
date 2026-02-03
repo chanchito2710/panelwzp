@@ -2321,10 +2321,9 @@ export class DeviceManager {
                         console.log(`[${deviceId}]   ID: ${chat.id} | Key: ${key} | Name: "${chat.name}"`);
                     }
                     
-                    // ========== DEDUPLICACIÓN POR ID (ÚNICO PASO) ==========
+                    // ========== PASO 1: DEDUPLICACIÓN POR ID ==========
                     // La DB puede tener múltiples registros del mismo contacto
                     // (ej: 123456@s.whatsapp.net y 123456:0@lid)
-                    // IMPORTANTE: Preservar customName cuando existe
                     const seenKeys = new Map<string, typeof mappedChats[0]>();
                     
                     for (const chat of mappedChats) {
@@ -2334,12 +2333,8 @@ export class DeviceManager {
                         if (existing) {
                             console.log(`[${deviceId}] Duplicado por ID detectado: ${chat.id} vs ${existing.id}`);
                             
-                            // CRÍTICO: Preservar el customName si alguno lo tiene
+                            // Preservar el customName si alguno lo tiene
                             const mergedCustomName = existing.customName || chat.customName || null;
-                            
-                            // Determinar cuál tiene mejor nombre
-                            const existingHasRealName = existing.name && !/^\d+$/.test(existing.name);
-                            const chatHasRealName = chat.name && !/^\d+$/.test(chat.name);
                             
                             // Elegir el registro más reciente como base
                             let winner = chat.lastMessageTime > existing.lastMessageTime ? chat : existing;
@@ -2364,11 +2359,41 @@ export class DeviceManager {
                         }
                     }
                     
-                    // Ordenar por tiempo y devolver
-                    const deduplicatedFromDB = Array.from(seenKeys.values())
+                    const deduplicatedById = Array.from(seenKeys.values());
+                    console.log(`[${deviceId}] Paso 1 - Por ID: ${mappedChats.length} -> ${deduplicatedById.length}`);
+                    
+                    // ========== PASO 2: DEDUPLICACIÓN POR CUSTOMNAME ==========
+                    // Si el usuario renombró dos chats con el MISMO nombre personalizado,
+                    // son el mismo contacto (pueden tener IDs completamente diferentes)
+                    const seenCustomNames = new Map<string, typeof mappedChats[0]>();
+                    const finalChats: typeof mappedChats = [];
+                    
+                    for (const chat of deduplicatedById) {
+                        // Solo deduplicar si tiene customName (nombre personalizado por el usuario)
+                        if (chat.customName) {
+                            const normalizedCustomName = chat.customName.toLowerCase().trim();
+                            const existing = seenCustomNames.get(normalizedCustomName);
+                            
+                            if (existing) {
+                                console.log(`[${deviceId}] Duplicado por customName detectado: "${chat.customName}" (${chat.id}) vs (${existing.id})`);
+                                // Mantener el más reciente
+                                if (chat.lastMessageTime > existing.lastMessageTime) {
+                                    seenCustomNames.set(normalizedCustomName, chat);
+                                }
+                            } else {
+                                seenCustomNames.set(normalizedCustomName, chat);
+                            }
+                        } else {
+                            // Sin customName, agregar directamente
+                            finalChats.push(chat);
+                        }
+                    }
+                    
+                    // Combinar: chats sin customName + chats con customName deduplicados
+                    const deduplicatedFromDB = [...finalChats, ...Array.from(seenCustomNames.values())]
                         .sort((a, b) => b.lastMessageTime - a.lastMessageTime);
                     
-                    console.log(`[${deviceId}] Chats de DB: ${rows.length} -> ${deduplicatedFromDB.length} después de deduplicar por ID`);
+                    console.log(`[${deviceId}] Paso 2 - Por customName: ${deduplicatedById.length} -> ${deduplicatedFromDB.length}`);
                     return deduplicatedFromDB;
                 }
             }
@@ -2782,30 +2807,56 @@ export class DeviceManager {
         const prisma = getPrisma();
         if (prisma) {
             try {
-                // Buscar TODOS los chats del mismo contacto (mismo número base)
+                // Buscar TODOS los chats del dispositivo
                 const allChats = await prisma.chat.findMany({
                     where: { deviceId },
-                    select: { waChatId: true }
+                    select: { id: true, waChatId: true, customName: true, lastMessageAt: true },
+                    orderBy: { lastMessageAt: 'desc' }
                 });
                 
-                // Filtrar los que tienen el mismo número base
-                const relatedChatIds = allChats
-                    .map(c => c.waChatId)
-                    .filter(id => chatKeyOf(id) === chatKey);
+                // 1. Encontrar registros con el mismo número base
+                const relatedByKey = allChats.filter(c => chatKeyOf(c.waChatId) === chatKey);
                 
-                console.log(`[${deviceId}] Renombrando ${relatedChatIds.length} registros con key "${chatKey}": ${relatedChatIds.join(', ')}`);
+                // 2. Si estamos poniendo un customName, buscar otros chats que YA tienen ese customName
+                //    (para fusionarlos - eliminar los duplicados)
+                const normalizedNewName = customName ? customName.toLowerCase().trim() : null;
+                const duplicatesByName = normalizedNewName 
+                    ? allChats.filter(c => 
+                        c.customName && 
+                        c.customName.toLowerCase().trim() === normalizedNewName &&
+                        chatKeyOf(c.waChatId) !== chatKey // No incluir el que estamos renombrando
+                    )
+                    : [];
                 
-                // Actualizar TODOS los registros relacionados
-                if (relatedChatIds.length > 0) {
+                console.log(`[${deviceId}] Rename: key="${chatKey}", relacionados=${relatedByKey.length}, duplicados por nombre=${duplicatesByName.length}`);
+                
+                // 3. Actualizar todos los registros relacionados por key
+                if (relatedByKey.length > 0) {
                     await prisma.chat.updateMany({
                         where: { 
                             deviceId,
-                            waChatId: { in: relatedChatIds }
+                            waChatId: { in: relatedByKey.map(c => c.waChatId) }
                         },
                         data: {
                             customName: customName ? customName.trim() : null
                         }
                     });
+                }
+                
+                // 4. Eliminar duplicados por nombre (mantener solo el más reciente, que es el que estamos renombrando)
+                if (duplicatesByName.length > 0) {
+                    console.log(`[${deviceId}] Eliminando ${duplicatesByName.length} chats duplicados con nombre "${customName}"`);
+                    for (const dup of duplicatesByName) {
+                        try {
+                            // Primero eliminar mensajes
+                            await prisma.message.deleteMany({ where: { chatId: dup.id } });
+                            // Luego eliminar el chat
+                            await prisma.chat.delete({ where: { id: dup.id } });
+                            console.log(`[${deviceId}] Eliminado duplicado: ${dup.waChatId}`);
+                        } catch (err) {
+                            console.warn(`[${deviceId}] Error eliminando duplicado ${dup.waChatId}:`, err);
+                        }
+                    }
                 }
             } catch (dbError: any) {
                 console.warn(`[${deviceId}] No se pudo guardar customName en DB:`, dbError.message);
