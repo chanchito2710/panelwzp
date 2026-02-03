@@ -164,6 +164,19 @@ export const BranchCard: React.FC<BranchCardProps> = ({ device, onOpenFull, onRe
         chatsRef.current = chats;
     }, [chats]);
 
+    // Función para normalizar IDs de chat y evitar duplicados
+    // CRÍTICO: Debe estar definida ANTES de usarse en fetchChats
+    const normalizeChatId = (id: string): string => {
+        if (!id) return '';
+        // Grupos tienen ID único
+        if (id.includes('@g.us')) return id;
+        // Extraer el número base sin sufijos de WhatsApp
+        const base = id.split('@')[0] || id;
+        // Remover prefijos de LID si existen (formato: numero:0@lid)
+        const clean = base.split(':')[0] || base;
+        return clean;
+    };
+
     // Cargar chats
     useEffect(() => {
         const fetchChats = async () => {
@@ -178,9 +191,48 @@ export const BranchCard: React.FC<BranchCardProps> = ({ device, onOpenFull, onRe
                     return;
                 }
                 if (Array.isArray(data)) {
-                    upsertBranchChats(device.id, data);
-                    setChats(data.slice(0, 5)); // Solo los 5 más recientes
-                    setTotalUnread(data.reduce((sum: number, c: Chat) => sum + (c.unreadCount || 0), 0));
+                    // ========== DEDUPLICACIÓN CRÍTICA ==========
+                    // El servidor puede devolver el mismo contacto con diferentes IDs
+                    // (ej: 123456@s.whatsapp.net y 123456:0@lid)
+                    // Debemos mostrar solo uno de cada contacto
+                    const seenKeys = new Map<string, Chat>();
+                    
+                    for (const chat of data as Chat[]) {
+                        const key = normalizeChatId(chat.id);
+                        const existing = seenKeys.get(key);
+                        
+                        if (existing) {
+                            // Ya existe un chat con esta clave
+                            // Mantener el que tiene nombre real (no solo números)
+                            const existingHasRealName = existing.name && !/^\d+$/.test(existing.name);
+                            const chatHasRealName = chat.name && !/^\d+$/.test(chat.name);
+                            
+                            // Priorizar: el más reciente + el que tiene mejor nombre
+                            if (chat.lastMessageTime > existing.lastMessageTime) {
+                                // El nuevo es más reciente
+                                if (existingHasRealName && !chatHasRealName) {
+                                    // Pero el existente tiene mejor nombre, combinar
+                                    seenKeys.set(key, { ...chat, name: existing.name });
+                                } else {
+                                    seenKeys.set(key, chat);
+                                }
+                            } else if (chatHasRealName && !existingHasRealName) {
+                                // El existente es más reciente pero el nuevo tiene mejor nombre
+                                seenKeys.set(key, { ...existing, name: chat.name });
+                            }
+                            // Si ninguna condición se cumple, mantener existing
+                        } else {
+                            seenKeys.set(key, chat);
+                        }
+                    }
+                    
+                    // Convertir Map a array y ordenar por tiempo
+                    const deduplicated = Array.from(seenKeys.values())
+                        .sort((a, b) => (b.lastMessageTime || 0) - (a.lastMessageTime || 0));
+                    
+                    upsertBranchChats(device.id, deduplicated);
+                    setChats(deduplicated.slice(0, 5)); // Solo los 5 más recientes
+                    setTotalUnread(deduplicated.reduce((sum: number, c: Chat) => sum + (c.unreadCount || 0), 0));
                 }
             } catch (error) {
                 console.error('Error:', error);
@@ -191,16 +243,6 @@ export const BranchCard: React.FC<BranchCardProps> = ({ device, onOpenFull, onRe
         const interval = setInterval(fetchChats, 10000);
         return () => clearInterval(interval);
     }, [device.id, device.status]);
-
-    // Función para normalizar IDs de chat y evitar duplicados
-    const normalizeChatId = (id: string): string => {
-        if (!id) return '';
-        // Extraer el número base sin sufijos de WhatsApp
-        const base = id.split('@')[0] || id;
-        // Remover prefijos de LID si existen
-        const clean = base.split(':')[0] || base;
-        return clean;
-    };
     
     // Socket para mensajes nuevos
     useEffect(() => {

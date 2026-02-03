@@ -2242,7 +2242,16 @@ export class DeviceManager {
                 }
                 
                 if (rows.length > 0) {
-                    return rows.map((c: any) => {
+                    // Función para extraer clave única de un chatId
+                    const getChatKey = (id: string): string => {
+                        if (!id) return '';
+                        if (id.includes('@g.us')) return id; // Grupos son únicos
+                        const prefix = id.split('@')[0] || id;
+                        return prefix.split(':')[0] || prefix;
+                    };
+                    
+                    // Mapear los datos de Prisma
+                    const mappedChats = rows.map((c: any) => {
                         const lastMsg = c.messages?.[0];
                         let lastMessageText: string | null = null;
                         let lastMessageType: string = 'text';
@@ -2282,18 +2291,19 @@ export class DeviceManager {
                         }
 
                         // Priorizar: customName (nombre personalizado) > name (pushName de WhatsApp) > número
-                        // Usar acceso seguro por si el campo customName no existe en la DB todavía
                         const customName = (c as any).customName || null;
                         const displayName = customName 
                             ? String(customName).trim() 
                             : (String(c.name || '').trim() || c.waChatId.split('@')[0]);
                         
+                        const lastMessageTime = c.lastMessageAt ? new Date(c.lastMessageAt).getTime() : Date.now();
+                        
                         return {
                             id: c.waChatId,
                             name: displayName,
-                            originalName: c.name || null, // Guardar el nombre original de WhatsApp
-                            customName: customName, // Nombre personalizado por el usuario
-                            lastMessageTime: c.lastMessageAt ? new Date(c.lastMessageAt).getTime() : Date.now(),
+                            originalName: c.name || null,
+                            customName: customName,
+                            lastMessageTime,
                             unreadCount: Number(c.unreadCount || 0),
                             isGroup: Boolean(c.isGroup),
                             profilePhotoUrl: c.profilePhotoUrl || null,
@@ -2303,6 +2313,42 @@ export class DeviceManager {
                             lastMessageMedia
                         };
                     });
+                    
+                    // ========== DEDUPLICACIÓN DE DATOS DE PRISMA ==========
+                    // La DB puede tener múltiples registros del mismo contacto
+                    // (ej: 123456@s.whatsapp.net y 123456:0@lid)
+                    const seenKeys = new Map<string, typeof mappedChats[0]>();
+                    
+                    for (const chat of mappedChats) {
+                        const key = getChatKey(chat.id);
+                        const existing = seenKeys.get(key);
+                        
+                        if (existing) {
+                            // Ya existe - decidir cuál mantener
+                            const existingHasRealName = existing.name && !/^\d+$/.test(existing.name);
+                            const chatHasRealName = chat.name && !/^\d+$/.test(chat.name);
+                            
+                            if (chat.lastMessageTime > existing.lastMessageTime) {
+                                // El nuevo es más reciente
+                                if (existingHasRealName && !chatHasRealName) {
+                                    seenKeys.set(key, { ...chat, name: existing.name });
+                                } else {
+                                    seenKeys.set(key, chat);
+                                }
+                            } else if (chatHasRealName && !existingHasRealName) {
+                                seenKeys.set(key, { ...existing, name: chat.name });
+                            }
+                        } else {
+                            seenKeys.set(key, chat);
+                        }
+                    }
+                    
+                    // Ordenar por tiempo y devolver
+                    const deduplicatedFromDB = Array.from(seenKeys.values())
+                        .sort((a, b) => b.lastMessageTime - a.lastMessageTime);
+                    
+                    console.log(`[${deviceId}] Chats de DB: ${rows.length} -> ${deduplicatedFromDB.length} después de deduplicar`);
+                    return deduplicatedFromDB;
                 }
             }
 
