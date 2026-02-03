@@ -52,6 +52,35 @@ export const WhatsAppPanelModal = ({ visible, onClose }: { visible: boolean, onC
         return localStorage.getItem('panelLogo') || null;
     });
 
+    // Actualizar logo cuando cambia en localStorage o cuando se abre el modal
+    useEffect(() => {
+        if (visible) {
+            const storedLogo = localStorage.getItem('panelLogo');
+            if (storedLogo !== panelLogo) {
+                setPanelLogo(storedLogo);
+            }
+        }
+        
+        // Escuchar cambios de storage desde otras pestañas/componentes
+        const handleStorageChange = (e: StorageEvent) => {
+            if (e.key === 'panelLogo') {
+                setPanelLogo(e.newValue);
+            }
+        };
+        window.addEventListener('storage', handleStorageChange);
+        
+        // También verificar periódicamente mientras el modal está visible
+        const interval = visible ? setInterval(() => {
+            const current = localStorage.getItem('panelLogo');
+            setPanelLogo(prev => prev !== current ? current : prev);
+        }, 1000) : undefined;
+        
+        return () => {
+            window.removeEventListener('storage', handleStorageChange);
+            if (interval) clearInterval(interval);
+        };
+    }, [visible]);
+
     useEffect(() => {
         devicesRef.current = devices;
     }, [devices]);
@@ -610,18 +639,18 @@ export const WhatsAppPanelModal = ({ visible, onClose }: { visible: boolean, onC
                     </div>
                     {/* Firma/Lema */}
                     <div style={{
-                        marginTop: 30,
-                        paddingTop: 20,
-                        borderTop: '1px solid rgba(212, 175, 55, 0.2)',
-                        textAlign: 'center',
-                        opacity: 0.7
+                        marginTop: 40,
+                        paddingTop: 25,
+                        borderTop: '1px solid rgba(212, 175, 55, 0.3)',
+                        textAlign: 'center'
                     }}>
                         <Text style={{ 
                             fontFamily: '"Playfair Display", Georgia, serif',
                             fontStyle: 'italic',
-                            fontSize: 13,
+                            fontSize: 26,
                             color: '#d4af37',
-                            letterSpacing: '0.5px'
+                            letterSpacing: '1px',
+                            textShadow: '0 0 20px rgba(212, 175, 55, 0.3)'
                         }}>
                             ✨ "Gracias Tincho, lo estás haciendo muy bien!" ✨
                         </Text>

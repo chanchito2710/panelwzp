@@ -44,6 +44,18 @@ const injectBranchCardStyles = () => {
             100% { left: 100%; }
         }
         
+        /* Pulso verde "en vivo" */
+        @keyframes livePulse {
+            0%, 100% { 
+                transform: scale(1);
+                box-shadow: 0 0 12px rgba(0, 210, 106, 0.6), 0 0 0 3px rgba(0, 210, 106, 0.25);
+            }
+            50% { 
+                transform: scale(1.15);
+                box-shadow: 0 0 20px rgba(0, 210, 106, 0.8), 0 0 0 6px rgba(0, 210, 106, 0.15);
+            }
+        }
+        
         /* Clase base retro para hover */
         .branch-card-animated {
             transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1) !important;
@@ -254,15 +266,16 @@ export const BranchCard: React.FC<BranchCardProps> = ({ device, onOpenFull, onRe
                         <Spin size="small" />
                     ) : (
                         <div style={{
-                            width: 10,
-                            height: 10,
+                            width: 12,
+                            height: 12,
                             borderRadius: '50%',
                             background: isConnected 
-                                ? 'linear-gradient(145deg, #c9a227 0%, #8b7015 100%)'
+                                ? 'linear-gradient(145deg, #00d26a 0%, #00a854 100%)'
                                 : '#5a4d3d',
                             boxShadow: isConnected 
-                                ? '0 0 10px rgba(201, 162, 39, 0.5), 0 0 0 2px rgba(201, 162, 39, 0.2)'
-                                : 'inset 0 1px 2px rgba(0, 0, 0, 0.3)'
+                                ? '0 0 12px rgba(0, 210, 106, 0.6), 0 0 0 3px rgba(0, 210, 106, 0.25)'
+                                : 'inset 0 1px 2px rgba(0, 0, 0, 0.3)',
+                            animation: isConnected ? 'livePulse 1.5s ease-in-out infinite' : 'none'
                         }} />
                     )}
                     <div>
