@@ -2321,9 +2321,10 @@ export class DeviceManager {
                         console.log(`[${deviceId}]   ID: ${chat.id} | Key: ${key} | Name: "${chat.name}"`);
                     }
                     
-                    // ========== PASO 1: DEDUPLICACIÓN POR ID ==========
+                    // ========== DEDUPLICACIÓN POR ID (ÚNICO PASO) ==========
                     // La DB puede tener múltiples registros del mismo contacto
                     // (ej: 123456@s.whatsapp.net y 123456:0@lid)
+                    // IMPORTANTE: Preservar customName cuando existe
                     const seenKeys = new Map<string, typeof mappedChats[0]>();
                     
                     for (const chat of mappedChats) {
@@ -2332,59 +2333,42 @@ export class DeviceManager {
                         
                         if (existing) {
                             console.log(`[${deviceId}] Duplicado por ID detectado: ${chat.id} vs ${existing.id}`);
+                            
+                            // CRÍTICO: Preservar el customName si alguno lo tiene
+                            const mergedCustomName = existing.customName || chat.customName || null;
+                            
+                            // Determinar cuál tiene mejor nombre
                             const existingHasRealName = existing.name && !/^\d+$/.test(existing.name);
                             const chatHasRealName = chat.name && !/^\d+$/.test(chat.name);
                             
-                            if (chat.lastMessageTime > existing.lastMessageTime) {
-                                if (existingHasRealName && !chatHasRealName) {
-                                    seenKeys.set(key, { ...chat, name: existing.name });
-                                } else {
-                                    seenKeys.set(key, chat);
-                                }
-                            } else if (chatHasRealName && !existingHasRealName) {
-                                seenKeys.set(key, { ...existing, name: chat.name });
+                            // Elegir el registro más reciente como base
+                            let winner = chat.lastMessageTime > existing.lastMessageTime ? chat : existing;
+                            let loser = chat.lastMessageTime > existing.lastMessageTime ? existing : chat;
+                            
+                            // Si el loser tiene mejor nombre y el winner no, combinar
+                            const winnerHasRealName = winner.name && !/^\d+$/.test(winner.name);
+                            const loserHasRealName = loser.name && !/^\d+$/.test(loser.name);
+                            
+                            if (loserHasRealName && !winnerHasRealName) {
+                                winner = { ...winner, name: loser.name, originalName: loser.originalName };
                             }
+                            
+                            // SIEMPRE preservar el customName
+                            if (mergedCustomName) {
+                                winner = { ...winner, customName: mergedCustomName, name: mergedCustomName };
+                            }
+                            
+                            seenKeys.set(key, winner);
                         } else {
                             seenKeys.set(key, chat);
                         }
                     }
                     
-                    const deduplicatedById = Array.from(seenKeys.values());
-                    console.log(`[${deviceId}] Después de dedup por ID: ${mappedChats.length} -> ${deduplicatedById.length}`);
-                    
-                    // ========== PASO 2: DEDUPLICACIÓN POR NOMBRE ==========
-                    // Eliminar duplicados que tienen exactamente el mismo nombre
-                    // (pueden ser el mismo contacto con diferentes IDs de WhatsApp)
-                    const seenNames = new Map<string, typeof mappedChats[0]>();
-                    
-                    for (const chat of deduplicatedById) {
-                        // Normalizar nombre: minúsculas, sin espacios extra
-                        const normalizedName = (chat.name || '').toLowerCase().trim().replace(/\s+/g, ' ');
-                        
-                        // No deduplicar números (pueden ser contactos diferentes sin nombre)
-                        if (/^\d+$/.test(normalizedName) || normalizedName === '') {
-                            // Es un número o vacío, usar el ID como clave para no mezclar
-                            seenNames.set(chat.id, chat);
-                            continue;
-                        }
-                        
-                        const existing = seenNames.get(normalizedName);
-                        if (existing) {
-                            console.log(`[${deviceId}] Duplicado por NOMBRE detectado: "${chat.name}" (${chat.id}) vs "${existing.name}" (${existing.id})`);
-                            // Mantener el más reciente
-                            if (chat.lastMessageTime > existing.lastMessageTime) {
-                                seenNames.set(normalizedName, chat);
-                            }
-                        } else {
-                            seenNames.set(normalizedName, chat);
-                        }
-                    }
-                    
                     // Ordenar por tiempo y devolver
-                    const deduplicatedFromDB = Array.from(seenNames.values())
+                    const deduplicatedFromDB = Array.from(seenKeys.values())
                         .sort((a, b) => b.lastMessageTime - a.lastMessageTime);
                     
-                    console.log(`[${deviceId}] Chats de DB: ${rows.length} -> ${deduplicatedById.length} (por ID) -> ${deduplicatedFromDB.length} (por nombre)`);
+                    console.log(`[${deviceId}] Chats de DB: ${rows.length} -> ${deduplicatedFromDB.length} después de deduplicar por ID`);
                     return deduplicatedFromDB;
                 }
             }
@@ -2791,23 +2775,47 @@ export class DeviceManager {
         const store = stores.get(deviceId);
         const canonicalChatId = resolveCanonicalChatId(store, chatId);
         
+        // Extraer el número base para actualizar TODOS los registros del mismo contacto
+        const chatKey = chatKeyOf(canonicalChatId);
+        
         // Intentar actualizar en la base de datos si está disponible
         const prisma = getPrisma();
         if (prisma) {
             try {
-                // Intentar actualizar - puede fallar si el campo customName no existe
-                await prisma.chat.updateMany({
-                    where: { 
-                        deviceId,
-                        waChatId: canonicalChatId
-                    },
-                    data: {
-                        customName: customName ? customName.trim() : null
-                    }
+                // Buscar TODOS los chats del mismo contacto (mismo número base)
+                const allChats = await prisma.chat.findMany({
+                    where: { deviceId },
+                    select: { waChatId: true }
                 });
+                
+                // Filtrar los que tienen el mismo número base
+                const relatedChatIds = allChats
+                    .map(c => c.waChatId)
+                    .filter(id => chatKeyOf(id) === chatKey);
+                
+                console.log(`[${deviceId}] Renombrando ${relatedChatIds.length} registros con key "${chatKey}": ${relatedChatIds.join(', ')}`);
+                
+                // Actualizar TODOS los registros relacionados
+                if (relatedChatIds.length > 0) {
+                    await prisma.chat.updateMany({
+                        where: { 
+                            deviceId,
+                            waChatId: { in: relatedChatIds }
+                        },
+                        data: {
+                            customName: customName ? customName.trim() : null
+                        }
+                    });
+                }
             } catch (dbError: any) {
-                console.warn(`[${deviceId}] No se pudo guardar customName en DB (campo puede no existir):`, dbError.message);
-                // Continuar de todas formas, guardaremos en memoria
+                console.warn(`[${deviceId}] No se pudo guardar customName en DB:`, dbError.message);
+                // Fallback: intentar actualizar solo el canonicalChatId
+                try {
+                    await prisma.chat.updateMany({
+                        where: { deviceId, waChatId: canonicalChatId },
+                        data: { customName: customName ? customName.trim() : null }
+                    });
+                } catch {}
             }
         }
         
@@ -2816,13 +2824,10 @@ export class DeviceManager {
             // Guardar el nombre personalizado en el store de contactos
             if (customName) {
                 store.contacts.set(canonicalChatId, customName.trim());
-            } else {
-                // Si se elimina el nombre personalizado, no borrar el contacto
-                // ya que puede tener el pushName original
             }
         }
         
-        console.log(`[${deviceId}] Chat ${canonicalChatId} renombrado a: ${customName || '(sin nombre personalizado)'}`);
+        console.log(`[${deviceId}] Chat ${canonicalChatId} (key: ${chatKey}) renombrado a: ${customName || '(sin nombre personalizado)'}`);
         
         return { 
             chatId: canonicalChatId, 

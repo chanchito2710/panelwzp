@@ -191,9 +191,10 @@ export const BranchCard: React.FC<BranchCardProps> = ({ device, onOpenFull, onRe
                     return;
                 }
                 if (Array.isArray(data)) {
-                    // ========== PASO 1: DEDUPLICACIÓN POR ID ==========
+                    // ========== DEDUPLICACIÓN POR ID (ÚNICO PASO) ==========
                     // El servidor puede devolver el mismo contacto con diferentes IDs
                     // (ej: 123456@s.whatsapp.net y 123456:0@lid)
+                    // IMPORTANTE: El backend ya hace la deduplicación, pero duplicamos aquí por seguridad
                     const seenKeys = new Map<string, Chat>();
                     
                     for (const chat of data as Chat[]) {
@@ -201,57 +202,30 @@ export const BranchCard: React.FC<BranchCardProps> = ({ device, onOpenFull, onRe
                         const existing = seenKeys.get(key);
                         
                         if (existing) {
-                            const existingHasRealName = existing.name && !/^\d+$/.test(existing.name);
-                            const chatHasRealName = chat.name && !/^\d+$/.test(chat.name);
+                            // Elegir el más reciente como base
+                            const winner = chat.lastMessageTime > existing.lastMessageTime ? chat : existing;
+                            const loser = chat.lastMessageTime > existing.lastMessageTime ? existing : chat;
                             
-                            if (chat.lastMessageTime > existing.lastMessageTime) {
-                                if (existingHasRealName && !chatHasRealName) {
-                                    seenKeys.set(key, { ...chat, name: existing.name });
-                                } else {
-                                    seenKeys.set(key, chat);
-                                }
-                            } else if (chatHasRealName && !existingHasRealName) {
-                                seenKeys.set(key, { ...existing, name: chat.name });
+                            // Preservar el mejor nombre
+                            const winnerHasRealName = winner.name && !/^\d+$/.test(winner.name);
+                            const loserHasRealName = loser.name && !/^\d+$/.test(loser.name);
+                            
+                            let merged = { ...winner };
+                            if (loserHasRealName && !winnerHasRealName) {
+                                merged.name = loser.name;
                             }
+                            
+                            seenKeys.set(key, merged);
                         } else {
                             seenKeys.set(key, chat);
                         }
                     }
                     
-                    const deduplicatedById = Array.from(seenKeys.values());
-                    
-                    // ========== PASO 2: DEDUPLICACIÓN POR NOMBRE ==========
-                    // Eliminar duplicados que tienen exactamente el mismo nombre
-                    // (pueden ser el mismo contacto con diferentes IDs de WhatsApp)
-                    const seenNames = new Map<string, Chat>();
-                    
-                    for (const chat of deduplicatedById) {
-                        // Normalizar nombre: minúsculas, sin espacios extra
-                        const normalizedName = (chat.name || '').toLowerCase().trim().replace(/\s+/g, ' ');
-                        
-                        // No deduplicar números (pueden ser contactos diferentes sin nombre)
-                        if (/^\d+$/.test(normalizedName) || normalizedName === '') {
-                            // Es un número o vacío, usar el ID como clave para no mezclar
-                            seenNames.set(chat.id, chat);
-                            continue;
-                        }
-                        
-                        const existing = seenNames.get(normalizedName);
-                        if (existing) {
-                            // Mantener el más reciente
-                            if (chat.lastMessageTime > existing.lastMessageTime) {
-                                seenNames.set(normalizedName, chat);
-                            }
-                        } else {
-                            seenNames.set(normalizedName, chat);
-                        }
-                    }
-                    
                     // Convertir Map a array y ordenar por tiempo
-                    const deduplicated = Array.from(seenNames.values())
+                    const deduplicated = Array.from(seenKeys.values())
                         .sort((a, b) => (b.lastMessageTime || 0) - (a.lastMessageTime || 0));
                     
-                    console.log(`[BranchCard ${device.id}] Chats: ${data.length} -> ${deduplicatedById.length} (por ID) -> ${deduplicated.length} (por nombre)`);
+                    console.log(`[BranchCard ${device.id}] Chats: ${data.length} -> ${deduplicated.length} después de deduplicar`);
                     
                     upsertBranchChats(device.id, deduplicated);
                     setChats(deduplicated.slice(0, 5)); // Solo los 5 más recientes
