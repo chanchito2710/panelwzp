@@ -97,6 +97,8 @@ export const ChatInterface = ({
     const [chats, setChats] = useState<Chat[]>([]);
     const [messages, setMessages] = useState<Message[]>([]);
     const chatsRef = useRef<Chat[]>([]);
+    const nameResolveTimerRef = useRef<number | null>(null);
+    const nameResolveStartedAtRef = useRef<Record<string, number>>({});
     // Guardar IDs de chats eliminados localmente para no volver a mostrarlos
     const [deletedChatIds, setDeletedChatIds] = useState<Set<string>>(new Set());
     const [inputText, setInputText] = useState('');
@@ -282,6 +284,19 @@ export const ChatInterface = ({
         if (chatId.includes('@g.us')) return chatId;
         const prefix = chatId.split('@')[0] || chatId;
         return prefix.split(':')[0] || prefix;
+    };
+
+    const isNumericName = (raw: string | null | undefined) => {
+        const s = String(raw || '').trim();
+        if (!s) return false;
+        return /^\d+$/.test(s);
+    };
+
+    const getDisplayChatName = (chat: Chat) => {
+        const name = String(chat?.name || '').trim();
+        if (!name) return null;
+        if (isNumericName(name)) return null;
+        return name;
     };
 
     // Formatear duración de audio (segundos -> mm:ss)
@@ -485,6 +500,26 @@ export const ChatInterface = ({
                     console.log(`[fetchChats] ${data.length} chats cargados, ${filteredData.length} después de filtrar/deduplicar`);
                     upsertBranchChats(device.id, filteredData);
                     setChats(filteredData);
+
+                    const now = Date.now();
+                    const unresolvedKeys = filteredData
+                        .filter((c: Chat) => !getDisplayChatName(c))
+                        .map((c: Chat) => getChatKey(c.id))
+                        .filter(Boolean);
+
+                    for (const key of unresolvedKeys) {
+                        if (!nameResolveStartedAtRef.current[key]) {
+                            nameResolveStartedAtRef.current[key] = now;
+                        }
+                    }
+
+                    const shouldKeepTrying = unresolvedKeys.some((k) => now - (nameResolveStartedAtRef.current[k] || now) < 60_000);
+                    if (shouldKeepTrying && !nameResolveTimerRef.current) {
+                        nameResolveTimerRef.current = window.setTimeout(() => {
+                            nameResolveTimerRef.current = null;
+                            fetchChats();
+                        }, 5_000);
+                    }
                 } else if (data?.error) {
                     console.error('[fetchChats] Error del servidor:', data.error);
                     // No borrar chats existentes
@@ -737,9 +772,6 @@ export const ChatInterface = ({
                 const isSameChat = incomingKey && activeKey && incomingKey === activeKey;
                 
                 if (isSameChat) {
-                    if (activeChat && data.chatId && data.chatId !== activeChat) {
-                        setActiveChat(data.chatId);
-                    }
                     setMessages(prev => {
                         const isDuplicate = prev.some(m => m.id === data.msg.id);
                         if (isDuplicate) return prev; // Evitar duplicados
@@ -788,6 +820,7 @@ export const ChatInterface = ({
                     if (existingIndex >= 0) {
                         // Chat existente - MANTENER el ID original, solo actualizar timestamp y contenido
                         const existingChat = prev[existingIndex];
+                        const candidateName = data.msg.senderName && !isNumericName(data.msg.senderName) ? data.msg.senderName : null;
                         const updatedChat: Chat = {
                             ...existingChat,
                             // CRÍTICO: NO cambiar el ID - mantener el original para evitar duplicados
@@ -795,17 +828,18 @@ export const ChatInterface = ({
                             lastMessage: data.msg.text || existingChat.lastMessage,
                             lastMessageType: msgType || existingChat.lastMessageType,
                             lastMessageFromMe: data.msg.fromMe,
-                            unreadCount: data.msg.fromMe ? existingChat.unreadCount : existingChat.unreadCount + 1
+                            unreadCount: data.msg.fromMe ? existingChat.unreadCount : existingChat.unreadCount + 1,
+                            name: (candidateName && (!existingChat.name || isNumericName(existingChat.name))) ? candidateName : existingChat.name
                         };
                         // Mover al principio sin crear duplicados
                         const filtered = prev.filter((_, i) => i !== existingIndex);
                         return [updatedChat, ...filtered];
                     } else {
                         // Chat nuevo - usar el nombre del sender si está disponible
-                        const senderName = data.msg.senderName || data.chatId.split('@')[0] || 'Desconocido';
+                        const senderName = data.msg.senderName && !isNumericName(data.msg.senderName) ? data.msg.senderName : null;
                         const newChat: Chat = {
                             id: data.chatId,
-                            name: senderName,
+                            name: senderName || '',
                             lastMessageTime: data.msg.timestamp,
                             lastMessage: data.msg.text || null,
                             lastMessageType: msgType,
@@ -819,6 +853,15 @@ export const ChatInterface = ({
             }
         });
 
+        socket.on('chat:name:update', (data: { deviceId: string; chatId: string; name: string }) => {
+            if (data.deviceId !== device.id) return;
+            const nextName = String(data.name || '').trim();
+            if (!nextName || isNumericName(nextName)) return;
+            const incomingKey = getChatKey(data.chatId);
+            if (!incomingKey) return;
+            setChats(prev => prev.map(c => (getChatKey(c.id) === incomingKey ? { ...c, name: nextName } : c)));
+        });
+
         socket.on('presence:update', (data: { deviceId: string, id: string, presences: any }) => {
             if (data.deviceId === device.id && data.id === activeChat) {
                 const state = Object.values(data.presences)[0] as any;
@@ -830,6 +873,7 @@ export const ChatInterface = ({
         return () => {
             socket.off('message:new');
             socket.off('presence:update');
+            socket.off('chat:name:update');
         };
     }, [socket, device.id, activeChat]);
 
@@ -1518,6 +1562,8 @@ export const ChatInterface = ({
                                 const isNotified = notifiedChats.has(chat.id) || 
                                     Array.from(notifiedChats).some(nid => getChatKey(nid) === getChatKey(chat.id));
                                 const isActive = activeChat === chat.id;
+                                const displayName = getDisplayChatName(chat) || 'Resolviendo...';
+                                const avatarLabel = getDisplayChatName(chat) ? displayName.substring(0, 2).toUpperCase() : '…';
                                 
                                 return (
                                 <List.Item
@@ -1561,7 +1607,7 @@ export const ChatInterface = ({
                                                     fontWeight: 700
                                                 }}
                                             >
-                                                {chat.name.substring(0, 2).toUpperCase()}
+                                                {avatarLabel}
                                             </Avatar>
                                         }
                                         title={
@@ -1572,7 +1618,7 @@ export const ChatInterface = ({
                                                 alignItems: 'center',
                                                 fontFamily: "'Crimson Text', Georgia, serif"
                                             }}>
-                                                <span style={{ fontWeight: 600 }}>{chat.name}</span>
+                                                <span style={{ fontWeight: 600 }}>{displayName}</span>
                                                 <Space size={4}>
                                                     {chat.unreadCount > 0 && (
                                                         <Badge

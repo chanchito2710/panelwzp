@@ -535,7 +535,7 @@ export const GlobalSecurityModal = ({ open, onClose }: { open: boolean; onClose:
                         label: 'Estadísticas',
                         children: (
                             <div>
-                                <Space style={{ marginBottom: 12 }}>
+                                <Space wrap style={{ marginBottom: 12, width: '100%' }}>
                                     <Button onClick={loadUserStats} loading={loadingUserStats}>
                                         Recargar
                                     </Button>
@@ -554,7 +554,7 @@ export const GlobalSecurityModal = ({ open, onClose }: { open: boolean; onClose:
                                         value={statsQ}
                                         onChange={(e) => setStatsQ(e.target.value)}
                                         placeholder="Buscar usuario"
-                                        style={{ width: 220 }}
+                                        style={{ width: 220, flex: '1 1 220px' }}
                                     />
                                     <Button
                                         onClick={() => {
@@ -607,7 +607,7 @@ export const GlobalSecurityModal = ({ open, onClose }: { open: boolean; onClose:
                         label: 'Logs',
                         children: (
                             <div>
-                                <Space style={{ marginBottom: 12 }}>
+                                <Space wrap style={{ marginBottom: 12, width: '100%' }}>
                                     <Button onClick={loadAudit} loading={loadingAudit}>
                                         Recargar
                                     </Button>
@@ -615,13 +615,13 @@ export const GlobalSecurityModal = ({ open, onClose }: { open: boolean; onClose:
                                         type="number"
                                         value={String(auditLimit)}
                                         onChange={(e) => setAuditLimit(Math.max(100, Math.min(10000, Number(e.target.value) || 2000)))}
-                                        style={{ width: 110 }}
+                                        style={{ width: 90 }}
                                     />
-                                    <Input type="datetime-local" value={auditFrom} onChange={(e) => setAuditFrom(e.target.value)} style={{ width: 210 }} />
-                                    <Input type="datetime-local" value={auditTo} onChange={(e) => setAuditTo(e.target.value)} style={{ width: 210 }} />
-                                    <Select value={auditActor} onChange={(v) => setAuditActor(v)} style={{ width: 220 }} options={userOptions} />
-                                    <Select value={auditTarget} onChange={(v) => setAuditTarget(v)} style={{ width: 220 }} options={userOptions} />
-                                    <Input value={auditAction} onChange={(e) => setAuditAction(e.target.value)} placeholder="Acción contiene..." style={{ width: 180 }} />
+                                    <Input type="datetime-local" value={auditFrom} onChange={(e) => setAuditFrom(e.target.value)} style={{ width: 190 }} />
+                                    <Input type="datetime-local" value={auditTo} onChange={(e) => setAuditTo(e.target.value)} style={{ width: 190 }} />
+                                    <Select value={auditActor} onChange={(v) => setAuditActor(v)} style={{ width: 200 }} options={userOptions} />
+                                    <Select value={auditTarget} onChange={(v) => setAuditTarget(v)} style={{ width: 200 }} options={userOptions} />
+                                    <Input value={auditAction} onChange={(e) => setAuditAction(e.target.value)} placeholder="Acción contiene..." style={{ width: 160, flex: '1 1 160px' }} />
                                     <Button
                                         onClick={() => {
                                             const rows = (audit || []).map((e: any) => ({

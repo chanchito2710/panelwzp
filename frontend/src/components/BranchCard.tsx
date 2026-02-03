@@ -154,6 +154,12 @@ export const BranchCard: React.FC<BranchCardProps> = ({ device, onOpenFull, onRe
     const [totalUnread, setTotalUnread] = useState(0);
     const [isNotified, setIsNotified] = useState(false);
     const chatsRef = useRef<Chat[]>([]);
+
+    const isNumericName = (raw: string | null | undefined) => {
+        const s = String(raw || '').trim();
+        if (!s) return false;
+        return /^\d+$/.test(s);
+    };
     
     // Inyectar estilos de animación
     useEffect(() => {
@@ -270,11 +276,12 @@ export const BranchCard: React.FC<BranchCardProps> = ({ device, onOpenFull, onRe
                 
                 // Preservar el nombre existente si lo hay, sino usar senderName
                 const existingChat = existingIndex >= 0 ? prevChats[existingIndex] : null;
-                const senderName = msg.senderName || chatId.split('@')[0] || 'Desconocido';
+                const senderName = msg.senderName && !isNumericName(msg.senderName) ? msg.senderName : null;
+                const baseName = existingChat?.name && !isNumericName(existingChat.name) ? existingChat.name : '';
                 
                 const updatedChat: Chat = {
                     id: existingChat?.id || chatId, // Mantener el ID original del chat existente
-                    name: existingChat?.name || senderName, // Preservar nombre existente
+                    name: baseName || senderName || '', // No mostrar números hasta resolver nombre
                     lastMessageTime: msg.timestamp || Date.now(),
                     unreadCount: existingChat 
                         ? (msg.fromMe ? existingChat.unreadCount : existingChat.unreadCount + 1)
@@ -307,9 +314,23 @@ export const BranchCard: React.FC<BranchCardProps> = ({ device, onOpenFull, onRe
         
         socket.on('message:new', handleNewMessage);
         socket.on('device:unread:update', handleUnreadUpdate);
+        socket.on('chat:name:update', (data: { deviceId: string; chatId: string; name: string }) => {
+            if (data.deviceId !== device.id) return;
+            const nextName = String(data.name || '').trim();
+            if (!nextName || isNumericName(nextName)) return;
+            const normalized = normalizeChatId(String(data.chatId || ''));
+            if (!normalized) return;
+            setChats(prevChats => prevChats.map(c => {
+                if (normalizeChatId(c.id) !== normalized) return c;
+                const current = String(c.name || '').trim();
+                if (current && !isNumericName(current)) return { ...c, name: nextName };
+                return { ...c, name: nextName };
+            }));
+        });
         return () => { 
             socket.off('message:new', handleNewMessage); 
             socket.off('device:unread:update', handleUnreadUpdate);
+            socket.off('chat:name:update');
         };
     }, [socket, device.id]);
 

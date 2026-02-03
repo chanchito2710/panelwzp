@@ -4,14 +4,14 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
-    "dev": "nodemon src/index.ts",
+    "dev": "nodemon --watch src --ext ts,json --exec \"ts-node src/index.ts\"",
     "start": "node dist/index.js",
-    "build": "prisma generate && tsc -p tsconfig.json",
+    "build": "node scripts/prisma-generate-safe.cjs && tsc -p tsconfig.json",
     "start:prod": "node dist/index.js",
-    "prisma:generate": "prisma generate",
+    "prisma:generate": "node scripts/prisma-generate-safe.cjs",
     "prisma:push": "prisma db push",
     "prisma:migrate:dev": "prisma migrate dev",
-    "prisma:migrate:deploy": "prisma migrate deploy"
+    "prisma:migrate:deploy": "node scripts/prisma-migrate-deploy-safe.cjs"
   },
   "files": [
     "dist",

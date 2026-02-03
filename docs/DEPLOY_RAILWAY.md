@@ -86,6 +86,9 @@ Notas:
 - Si existe volumen, Railway inyecta `RAILWAY_VOLUME_MOUNT_PATH` y el backend lo usa automáticamente.
 - En la práctica, la sesión debe permanecer `CONNECTED` después de redeploy.
 
+Tip (Prisma CLI / Railway):
+- El backend corre `prisma generate` y `prisma migrate deploy` con `CHECKPOINT_DISABLE=1` para evitar prompts interactivos en CI.
+
 ### 3.1) MySQL (recomendado/obligatorio para chats)
 
 Objetivo: que **los chats y mensajes no se pierdan** y no haya inconsistencias.

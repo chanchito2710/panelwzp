@@ -74,6 +74,124 @@ function isLid(chatId: string): boolean {
     return String(chatId || '').endsWith('@lid');
 }
 
+function tryRegisterLidPhonePair(store: SimpleStore, a: string, b: string) {
+    const x = String(a || '').trim();
+    const y = String(b || '').trim();
+    if (!x || !y || x === y) return;
+    if (isLid(x) && !isLid(y) && y.endsWith('@s.whatsapp.net')) return registerLidPhoneMapping(store, x, y);
+    if (isLid(y) && !isLid(x) && x.endsWith('@s.whatsapp.net')) return registerLidPhoneMapping(store, y, x);
+}
+
+function scoreCanonicalCandidate(store: SimpleStore, chatId: string): number {
+    const id = String(chatId || '');
+    const chat = store.chats.get(id);
+    const ts = Number(chat?.conversationTimestamp || 0);
+    const lidPenalty = isLid(id) ? 1 : 0;
+    const suffixPenalty = hasDeviceSuffix(id) ? 1 : 0;
+    const lenPenalty = Math.min(120, id.length);
+    return (ts || 0) * 1_000_000 - lidPenalty * 10_000 - suffixPenalty * 1_000 - lenPenalty;
+}
+
+function pickCanonicalChatId(store: SimpleStore, candidates: string[], fallback: string): string {
+    const uniq = Array.from(new Set(candidates.filter(Boolean).map(String)));
+    if (uniq.length === 0) return fallback;
+    let best = uniq[0] || fallback;
+    let bestScore = scoreCanonicalCandidate(store, best);
+    for (let i = 1; i < uniq.length; i++) {
+        const id = uniq[i]!;
+        const s = scoreCanonicalCandidate(store, id);
+        if (s > bestScore) {
+            best = id;
+            bestScore = s;
+        } else if (s === bestScore) {
+            best = preferredChatId(best, id);
+            bestScore = scoreCanonicalCandidate(store, best);
+        }
+    }
+    return best || fallback;
+}
+
+function isNumericName(raw: string | null | undefined): boolean {
+    const s = String(raw || '').trim();
+    if (!s) return false;
+    return /^\d+$/.test(s);
+}
+
+const DB_READ_MAX_AGE_DAYS = 7;
+const dbReadCutoffDate = (nowMs: number = Date.now()) => new Date(nowMs - DB_READ_MAX_AGE_DAYS * 24 * 60 * 60 * 1000);
+const dbReadCutoffMs = (nowMs: number = Date.now()) => nowMs - DB_READ_MAX_AGE_DAYS * 24 * 60 * 60 * 1000;
+
+function scheduleNameResolution(io: SocketServer | null, store: SimpleStore, deviceId: string, chatId: string) {
+    const MAX_MS = 60_000;
+    const STEP_MS = 5_000;
+    const startedAt = Date.now();
+    const tryResolve = () => {
+        const contactName = String(resolveDisplayNameFromStore(store, chatId) || '').trim();
+        if (contactName && !isNumericName(contactName)) {
+            const chat = store.chats.get(chatId) || { id: chatId, name: contactName, conversationTimestamp: Date.now(), unreadCount: 0 };
+            chat.name = contactName;
+            store.chats.set(chatId, chat);
+            io?.emit('chat:name:update', { deviceId, chatId, name: contactName });
+            return;
+        }
+        if (Date.now() - startedAt >= MAX_MS) return;
+        setTimeout(tryResolve, STEP_MS);
+    };
+    setTimeout(tryResolve, STEP_MS);
+}
+
+function resolveDisplayNameFromStore(store: SimpleStore, chatId: string): string | null {
+    const id = String(chatId || '').trim();
+    if (!id) return null;
+
+    if (id.endsWith('@g.us')) {
+        const groupName = String(store.chats.get(id)?.name || store.contacts.get(id) || '').trim();
+        return groupName && !isNumericName(groupName) ? groupName : null;
+    }
+
+    const key = chatKeyOf(id);
+    if (!key) {
+        const direct = String(store.contacts.get(id) || store.chats.get(id)?.name || '').trim();
+        return direct && !isNumericName(direct) ? direct : null;
+    }
+
+    const candidates: string[] = [];
+
+    const mappedPeer = isLid(id)
+        ? String(store.lidToPhone.get(id) || '')
+        : (id.endsWith('@s.whatsapp.net') ? String(store.phoneToLid.get(id) || '') : '');
+    if (mappedPeer) {
+        const peerContact = String(store.contacts.get(mappedPeer) || '').trim();
+        if (peerContact) candidates.push(peerContact);
+        const peerChatName = String(store.chats.get(mappedPeer)?.name || '').trim();
+        if (peerChatName) candidates.push(peerChatName);
+    }
+
+    const directContact = String(store.contacts.get(id) || '').trim();
+    if (directContact) candidates.push(directContact);
+    const directChatName = String(store.chats.get(id)?.name || '').trim();
+    if (directChatName) candidates.push(directChatName);
+
+    for (const [cid, name] of store.contacts.entries()) {
+        if (chatKeyOf(cid) !== key) continue;
+        const s = String(name || '').trim();
+        if (s) candidates.push(s);
+    }
+    for (const [cid, chat] of store.chats.entries()) {
+        if (chatKeyOf(cid) !== key) continue;
+        const s = String((chat as any)?.name || '').trim();
+        if (s) candidates.push(s);
+    }
+
+    const cleaned = candidates
+        .map((s) => String(s || '').trim())
+        .filter((s) => s && !isNumericName(s));
+
+    if (!cleaned.length) return null;
+    cleaned.sort((a, b) => b.length - a.length);
+    return cleaned[0] || null;
+}
+
 // Registrar mapeo LID <-> Phone cuando lo detectamos
 function registerLidPhoneMapping(store: SimpleStore, lid: string, phone: string) {
     if (!lid || !phone || !isLid(lid) || isLid(phone)) return;
@@ -164,48 +282,53 @@ function resolveCanonicalChatId(store: SimpleStore | undefined, chatId: string):
         return chatId;
     }
 
-    // 3. Para LIDs, SOLO usar mapeo explícito (no fusionar arbitrariamente)
-    if (isLid(chatId)) {
-        const phoneNumber = store.lidToPhone.get(chatId);
-        if (phoneNumber && store.chats.has(phoneNumber)) {
-            store.aliases.set(chatId, phoneNumber);
-            return phoneNumber;
-        }
-        // LID sin mapeo conocido -> mantener como está
-        return chatId;
-    }
-    
-    // 4. Para números de teléfono normales
-    if (chatId.endsWith('@s.whatsapp.net')) {
-        const lid = store.phoneToLid.get(chatId);
-        if (lid && store.chats.has(lid) && !store.chats.has(chatId)) {
-            // El chat existe con LID pero no con número, migrar al número
-            mergeChatData(store, lid, chatId);
-            return chatId;
-        }
-        
-        // Buscar solo variantes del MISMO número (con sufijo de dispositivo :0, :1, etc)
-        const key = chatKeyOf(chatId);
-        if (!key) return chatId;
+    const key = chatKeyOf(chatId);
+    if (!key) return chatId;
 
-        // Solo buscar coincidencias entre @s.whatsapp.net con diferentes sufijos
-        let best = chatId;
-        for (const existingId of store.chats.keys()) {
-            // NO fusionar con LIDs basándose en chatKey
-            if (isLid(existingId)) continue;
-            if (!existingId.endsWith('@s.whatsapp.net')) continue;
-            if (chatKeyOf(existingId) !== key) continue;
-            best = preferredChatId(best, existingId);
-        }
-        
-        if (best !== chatId) {
-            store.aliases.set(chatId, best);
-        }
-        return best;
+    const mappedPeer = isLid(chatId)
+        ? String(store.lidToPhone.get(chatId) || '')
+        : (chatId.endsWith('@s.whatsapp.net') ? String(store.phoneToLid.get(chatId) || '') : '');
+
+    const peerKey = mappedPeer ? chatKeyOf(mappedPeer) : '';
+
+    const keys = Array.from(new Set([key, peerKey].filter(Boolean)));
+    const candidates: string[] = [];
+    for (const k of keys) {
+        const existingCanonical = store.canonicalByKey.get(k);
+        if (existingCanonical) candidates.push(existingCanonical);
+    }
+    candidates.push(chatId);
+    if (mappedPeer) candidates.push(mappedPeer);
+    for (const existingId of store.chats.keys()) {
+        const existingKey = chatKeyOf(existingId);
+        if (!keys.includes(existingKey)) continue;
+        candidates.push(existingId);
     }
 
-    // Otros tipos de ID -> mantener como están
-    return chatId;
+    const canonical = pickCanonicalChatId(store, candidates, chatId);
+    const canonicalKey = chatKeyOf(canonical);
+    for (const k of Array.from(new Set([...keys, canonicalKey].filter(Boolean)))) {
+        store.canonicalByKey.set(k, canonical);
+    }
+
+    const lidCandidate = candidates.find((c) => isLid(c)) || null;
+    const phoneCandidate = candidates.find((c) => String(c || '').endsWith('@s.whatsapp.net')) || null;
+    if (lidCandidate && phoneCandidate) {
+        tryRegisterLidPhonePair(store, lidCandidate, phoneCandidate);
+    }
+
+    for (const cid of Array.from(new Set(candidates))) {
+        if (!cid) continue;
+        if (cid === canonical) continue;
+        if (store.chats.has(cid) || store.messages.has(cid) || store.contacts.has(cid) || store.profilePhotos.has(cid)) {
+            mergeChatData(store, cid, canonical);
+        } else {
+            store.aliases.set(cid, canonical);
+        }
+    }
+
+    if (canonical !== chatId) store.aliases.set(chatId, canonical);
+    return canonical;
 }
 
 interface Device {
@@ -371,11 +494,23 @@ export class DeviceManager {
                     // Tiene customName, mantener el name original
                     nameToUse = existingChat.name;
                 } else if (existingChat.name && existingChat.name.trim()) {
-                    // Tiene name, solo actualizar si el nuevo es más descriptivo
-                    // (evita que un pushName corto sobrescriba uno más completo)
-                    const existingLen = existingChat.name.trim().length;
-                    const newLen = newName ? newName.length : 0;
-                    nameToUse = newLen > existingLen ? newName : existingChat.name;
+                    const existingTrimmed = existingChat.name.trim();
+                    const incomingTrimmed = newName ? newName.trim() : '';
+                    const deviceNameTrimmed = String(localDevice?.name || '').trim();
+
+                    const incomingIsValid = Boolean(incomingTrimmed) && !isNumericName(incomingTrimmed);
+                    const existingIsNumeric = isNumericName(existingTrimmed);
+                    const existingMatchesDevice =
+                        Boolean(deviceNameTrimmed) &&
+                        existingTrimmed.localeCompare(deviceNameTrimmed, undefined, { sensitivity: 'accent' }) === 0;
+
+                    if (incomingIsValid && (existingIsNumeric || existingMatchesDevice)) {
+                        nameToUse = incomingTrimmed;
+                    } else {
+                        const existingLen = existingTrimmed.length;
+                        const newLen = incomingTrimmed.length;
+                        nameToUse = newLen > existingLen ? (incomingTrimmed || null) : existingTrimmed;
+                    }
                 } else {
                     // No tiene name, usar el nuevo
                     nameToUse = newName;
@@ -1291,7 +1426,7 @@ export class DeviceManager {
 
     public async initDevice(deviceId: string, mode?: 'qr' | 'code') {
         const existingDevice = this.devices.find(d => d.id === deviceId);
-        if (!existingDevice) throw new Error('Dispositivo no encontrado');
+        if (!existingDevice) return;
 
         if (this.sessions.has(deviceId)) {
             this.updateDevice(deviceId, { status: 'CONNECTING' });
@@ -1496,6 +1631,7 @@ export class DeviceManager {
                 const store = stores.get(deviceId);
                 let unifiedChatId = chatId;
                 if (store) {
+                    tryRegisterLidPhonePair(store, String(msg?.key?.remoteJid || ''), String((msg?.key as any)?.participant || ''));
                     const existingCanonical = store.canonicalByKey.get(chatKey);
                     if (existingCanonical) {
                         unifiedChatId = existingCanonical;
@@ -1504,6 +1640,9 @@ export class DeviceManager {
                         const byKey = resolveCanonicalChatId(store, chatId);
                         unifiedChatId = byKey;
                     }
+
+                    const canonicalKey = chatKeyOf(unifiedChatId);
+                    if (canonicalKey) store.canonicalByKey.set(canonicalKey, unifiedChatId);
 
                     if (unifiedChatId !== chatId) {
                         mergeChatData(store, chatId, unifiedChatId);
@@ -1536,6 +1675,21 @@ export class DeviceManager {
 
                 // Obtener pushName (nombre del contacto en WhatsApp)
                 const pushName = (msg as any).pushName || null;
+                const senderJid = String((msg.key as any)?.participant || originalChatId || '').trim();
+                const isGroupChat = String(originalChatId || '').endsWith('@g.us');
+                let senderNameForEvent: string | null = null;
+                if (!fromMe) {
+                    const pn = String(pushName || '').trim();
+                    senderNameForEvent = pn || null;
+                    if (store) {
+                        const byContact = String(store.contacts.get(senderJid) || store.contacts.get(originalChatId) || '').trim();
+                        if (!senderNameForEvent && byContact) senderNameForEvent = byContact;
+                        if (!senderNameForEvent) senderNameForEvent = senderJid.split('@')[0] || null;
+                    } else {
+                        senderNameForEvent = senderJid.split('@')[0] || null;
+                    }
+                    if (isNumericName(senderNameForEvent)) senderNameForEvent = null;
+                }
 
                 // Guardar en el store simple (store ya fue obtenido arriba)
                 if (store) {
@@ -1543,8 +1697,8 @@ export class DeviceManager {
                     
                     // IMPORTANTE: Solo guardar pushName para el ID ORIGINAL del mensaje
                     // No para el unifiedChatId si son diferentes (evita mezclar nombres)
-                    if (pushName && !msg.key.fromMe && originalChatId) {
-                        const targetId = originalChatId; // Usar ID original, NO el unificado
+                    if (pushName && !msg.key.fromMe && senderJid) {
+                        const targetId = isGroupChat ? senderJid : originalChatId; // En grupos, el nombre es del participante, no del grupo
                         const existingName = store.contacts.get(targetId);
                         const lastKnown = store.lastPushName.get(targetId);
                         
@@ -1554,7 +1708,7 @@ export class DeviceManager {
                             store.lastPushName.set(targetId, pushName);
                             
                             // Si el unificado es diferente y NO tiene nombre propio, también asignar
-                            if (unifiedChatId !== originalChatId && !store.contacts.get(unifiedChatId)) {
+                            if (!isGroupChat && unifiedChatId !== originalChatId && !store.contacts.get(unifiedChatId)) {
                                 store.contacts.set(unifiedChatId, pushName);
                             }
                             
@@ -1562,24 +1716,28 @@ export class DeviceManager {
                         }
                         
                         // Mapeo bidireccional LID <-> Phone para consistencia futura
-                        if (isLid(originalChatId) && !isLid(unifiedChatId)) {
-                            registerLidPhoneMapping(store, originalChatId, unifiedChatId);
-                        } else if (!isLid(originalChatId) && isLid(unifiedChatId)) {
-                            registerLidPhoneMapping(store, unifiedChatId, originalChatId);
+                        if (!isGroupChat && originalChatId) {
+                            if (isLid(originalChatId) && !isLid(unifiedChatId)) {
+                                registerLidPhoneMapping(store, originalChatId, unifiedChatId);
+                            } else if (!isLid(originalChatId) && isLid(unifiedChatId)) {
+                                registerLidPhoneMapping(store, unifiedChatId, originalChatId);
+                            }
                         }
                     }
 
                     // Obtener nombre del contacto - priorizar el ID específico del chat
-                    const contactName = store.contacts.get(unifiedChatId) || 
-                                       store.contacts.get(originalChatId) ||
-                                       pushName;
+                    const contactName = resolveDisplayNameFromStore(store, unifiedChatId) ||
+                                       resolveDisplayNameFromStore(store, originalChatId) ||
+                                       (!fromMe ? (String(pushName || '').trim() || null) : null);
 
                     // Determinar el nombre del chat
                     let chatName: string;
                     if (unifiedChatId.endsWith('@g.us')) {
-                        chatName = contactName || unifiedChatId.split('@')[0] + ' (Grupo)';
+                        const base = unifiedChatId.split('@')[0] || unifiedChatId;
+                        chatName = String(contactName || `${base} (Grupo)`);
                     } else {
-                        chatName = contactName || unifiedChatId.split('@')[0];
+                        const base = unifiedChatId.split('@')[0] || unifiedChatId;
+                        chatName = String(contactName || base);
                     }
 
                     // Actualizar/crear chat usando unifiedChatId
@@ -1604,8 +1762,7 @@ export class DeviceManager {
                         store.messages.set(unifiedChatId, []);
                     }
                     
-                    // Obtener senderName (pushName del remitente) para mensajes recibidos
-                    const senderName = !fromMe ? (pushName || null) : null;
+                    const senderName = senderNameForEvent;
                     
                     const stored = {
                         key: msg.key,
@@ -1643,7 +1800,7 @@ export class DeviceManager {
                                 return JSON.stringify({ 
                                     media: mediaMetadata || null, 
                                     location: location || null,
-                                    senderName: !fromMe ? (pushName || null) : null
+                                    senderName
                                 });
                             } catch {
                                 return null;
@@ -1666,9 +1823,22 @@ export class DeviceManager {
                         media: mediaMetadata,
                         location,
                         source,
-                        senderName: !fromMe ? (pushName || null) : null
+                        senderName: senderNameForEvent
                     }
                 });
+
+                // Si el nombre del chat es numérico o vacío, iniciar resolución diferida
+                if (store) {
+                    const currentChatName = String(store.chats.get(unifiedChatId)?.name || '').trim();
+                    const branchName = String(this.devices.find((d) => d.id === deviceId)?.name || '').trim();
+                    const isBranchName =
+                        Boolean(branchName) &&
+                        currentChatName &&
+                        currentChatName.localeCompare(branchName, undefined, { sensitivity: 'accent' }) === 0;
+                    if (!currentChatName || isNumericName(currentChatName) || isBranchName) {
+                        scheduleNameResolution(this.io, store, deviceId, unifiedChatId);
+                    }
+                }
             }
         });
 
@@ -1731,6 +1901,12 @@ export class DeviceManager {
             const store = stores.get(deviceId);
             if (store) {
                 for (const contact of contacts) {
+                    try {
+                        const values = Object.values(contact as any).filter((v) => typeof v === 'string').map((v) => String(v));
+                        const lid = values.find((v) => v.endsWith('@lid')) || '';
+                        const phone = values.find((v) => v.endsWith('@s.whatsapp.net')) || '';
+                        if (lid && phone) tryRegisterLidPhonePair(store, lid, phone);
+                    } catch {}
                     if (contact.id && (contact.name || contact.notify)) {
                         const contactName = contact.name || contact.notify || '';
                         if (contactName) {
@@ -1746,6 +1922,12 @@ export class DeviceManager {
             const store = stores.get(deviceId);
             if (store) {
                 for (const update of updates) {
+                    try {
+                        const values = Object.values(update as any).filter((v) => typeof v === 'string').map((v) => String(v));
+                        const lid = values.find((v) => v.endsWith('@lid')) || '';
+                        const phone = values.find((v) => v.endsWith('@s.whatsapp.net')) || '';
+                        if (lid && phone) tryRegisterLidPhonePair(store, lid, phone);
+                    } catch {}
                     if (update.id && (update.name || update.notify)) {
                         const contactName = update.name || update.notify || '';
                         if (contactName) {
@@ -2215,14 +2397,19 @@ export class DeviceManager {
         try {
             const prisma = getPrisma();
             if (prisma) {
+                const cutoff = dbReadCutoffDate();
+                const localDevice = this.devices.find((d) => d.id === deviceId);
+                const branchName = String(localDevice?.name || '').trim();
+                const storeForName = stores.get(deviceId);
                 // Obtener chats con su último mensaje
                 let rows: any[] = [];
                 try {
                     rows = await prisma.chat.findMany({
-                        where: { deviceId },
+                        where: { deviceId, lastMessageAt: { gte: cutoff } },
                         orderBy: { lastMessageAt: 'desc' },
                         include: {
                             messages: {
+                                where: { timestamp: { gte: cutoff } },
                                 orderBy: { timestamp: 'desc' },
                                 take: 1,
                                 select: {
@@ -2292,9 +2479,22 @@ export class DeviceManager {
 
                         // Priorizar: customName (nombre personalizado) > name (pushName de WhatsApp) > número
                         const customName = (c as any).customName || null;
-                        const displayName = customName 
-                            ? String(customName).trim() 
-                            : (String(c.name || '').trim() || c.waChatId.split('@')[0]);
+                        const rawDbName = String(c.name || '').trim();
+                        const dbNameIsBranch =
+                            Boolean(branchName) &&
+                            rawDbName &&
+                            rawDbName.localeCompare(branchName, undefined, { sensitivity: 'accent' }) === 0;
+
+                        const storeName = storeForName ? String(resolveDisplayNameFromStore(storeForName, c.waChatId) || '').trim() : '';
+                        const storeNameIsBranch =
+                            Boolean(branchName) &&
+                            storeName &&
+                            storeName.localeCompare(branchName, undefined, { sensitivity: 'accent' }) === 0;
+                        const storeNameValid = Boolean(storeName) && !isNumericName(storeName) && !storeNameIsBranch;
+
+                        const displayName = customName
+                            ? String(customName).trim()
+                            : (storeNameValid ? storeName : (dbNameIsBranch ? '' : rawDbName)) || c.waChatId.split('@')[0];
                         
                         const lastMessageTime = c.lastMessageAt ? new Date(c.lastMessageAt).getTime() : Date.now();
                         
@@ -2319,6 +2519,63 @@ export class DeviceManager {
                     for (const chat of mappedChats) {
                         const key = getChatKey(chat.id);
                         console.log(`[${deviceId}]   ID: ${chat.id} | Key: ${key} | Name: "${chat.name}"`);
+                    }
+
+                    const avatarHashByUrl = new Map<string, string>();
+                    const avatarHashOf = (url: string | null): string | null => {
+                        const u = String(url || '').trim();
+                        if (!u) return null;
+                        const cached = avatarHashByUrl.get(u);
+                        if (cached) return cached;
+                        const rel = u.replace(/^\//, '').split('/').join(path.sep);
+                        const filePath = path.join(DB_ROOT, rel);
+                        if (!fs.existsSync(filePath)) return null;
+                        try {
+                            const buf = fs.readFileSync(filePath);
+                            if (!buf || buf.length < 2048) return null;
+                            const h = crypto.createHash('sha256').update(buf).digest('hex');
+                            avatarHashByUrl.set(u, h);
+                            return h;
+                        } catch {
+                            return null;
+                        }
+                    };
+
+                    const bestNameByAvatarHash = new Map<string, { name: string; score: number }>();
+                    for (const chat of mappedChats) {
+                        const h = avatarHashOf(chat.profilePhotoUrl || null);
+                        if (!h) continue;
+                        const n = String(chat.name || '').trim();
+                        if (!n || isNumericName(n)) continue;
+                        const isBranch =
+                            Boolean(branchName) &&
+                            n.localeCompare(branchName, undefined, { sensitivity: 'accent' }) === 0;
+                        if (isBranch) continue;
+                        let score = Math.min(200, n.length);
+                        if (chat.customName) score += 1_000_000;
+                        if (String(chat.id || '').endsWith('@s.whatsapp.net')) score += 10_000;
+                        if (!String(chat.id || '').endsWith('@lid')) score += 1_000;
+                        const existing = bestNameByAvatarHash.get(h);
+                        if (!existing || score > existing.score) {
+                            bestNameByAvatarHash.set(h, { name: n, score });
+                        }
+                    }
+
+                    for (const chat of mappedChats) {
+                        const h = avatarHashOf(chat.profilePhotoUrl || null);
+                        if (!h) continue;
+                        const best = bestNameByAvatarHash.get(h);
+                        if (!best?.name) continue;
+                        const n = String(chat.name || '').trim();
+                        const isBranch =
+                            Boolean(branchName) &&
+                            n &&
+                            n.localeCompare(branchName, undefined, { sensitivity: 'accent' }) === 0;
+                        const invalid = !n || isNumericName(n) || isBranch;
+                        const isLidChat = String(chat.id || '').endsWith('@lid');
+                        if (invalid || (isLidChat && n !== best.name)) {
+                            chat.name = best.name;
+                        }
                     }
                     
                     // ========== PASO 1: DEDUPLICACIÓN POR ID ==========
@@ -2502,12 +2759,74 @@ export class DeviceManager {
             
             const deduplicated = Array.from(seenKeys.values());
             const sorted = deduplicated.sort((a, b) => b.lastMessageTime - a.lastMessageTime);
+
+            const branchName = String(this.devices.find((d) => d.id === deviceId)?.name || '').trim();
+            const avatarHashByUrl = new Map<string, string>();
+            const avatarHashOf = (url: string | null): string | null => {
+                const u = String(url || '').trim();
+                if (!u) return null;
+                const cached = avatarHashByUrl.get(u);
+                if (cached) return cached;
+                const rel = u.replace(/^\//, '').split('/').join(path.sep);
+                const filePath = path.join(DB_ROOT, rel);
+                if (!fs.existsSync(filePath)) return null;
+                try {
+                    const buf = fs.readFileSync(filePath);
+                    if (!buf || buf.length < 2048) return null;
+                    const h = crypto.createHash('sha256').update(buf).digest('hex');
+                    avatarHashByUrl.set(u, h);
+                    return h;
+                } catch {
+                    return null;
+                }
+            };
+
+            const bestNameByAvatarHash = new Map<string, { name: string; score: number }>();
+            for (const chat of sorted) {
+                const h = avatarHashOf(chat.profilePhotoUrl || null);
+                if (!h) continue;
+                const n = String(chat.name || '').trim();
+                if (!n || isNumericName(n)) continue;
+                const isBranch =
+                    Boolean(branchName) &&
+                    n.localeCompare(branchName, undefined, { sensitivity: 'accent' }) === 0;
+                if (isBranch) continue;
+                let score = Math.min(200, n.length);
+                if (String(chat.id || '').endsWith('@s.whatsapp.net')) score += 10_000;
+                if (!String(chat.id || '').endsWith('@lid')) score += 1_000;
+                const existing = bestNameByAvatarHash.get(h);
+                if (!existing || score > existing.score) bestNameByAvatarHash.set(h, { name: n, score });
+            }
+
+            for (const chat of sorted) {
+                const h = avatarHashOf(chat.profilePhotoUrl || null);
+                if (!h) continue;
+                const best = bestNameByAvatarHash.get(h);
+                if (!best?.name) continue;
+                const n = String(chat.name || '').trim();
+                const isBranch =
+                    Boolean(branchName) &&
+                    n &&
+                    n.localeCompare(branchName, undefined, { sensitivity: 'accent' }) === 0;
+                const invalid = !n || isNumericName(n) || isBranch;
+                const isLidChat = String(chat.id || '').endsWith('@lid');
+                if (invalid || (isLidChat && n !== best.name)) {
+                    chat.name = best.name;
+                    const storedChat = store.chats.get(chat.id);
+                    if (storedChat) {
+                        storedChat.name = best.name;
+                        store.chats.set(chat.id, storedChat);
+                    }
+                }
+            }
+
             for (const chat of sorted.slice(0, 15)) {
                 if (chat.isGroup) continue;
                 if (chat.profilePhotoUrl) continue;
                 this.scheduleProfilePhotoFetch(deviceId, chat.id);
             }
-            return sorted;
+            const cutoffMs = dbReadCutoffMs();
+            return sorted.filter((c: any) => Number(c?.lastMessageTime || 0) >= cutoffMs);
         } catch (error) {
             console.error('Error al obtener chats:', error);
             return [];
@@ -2617,6 +2936,7 @@ export class DeviceManager {
         try {
             const prisma = getPrisma();
             if (prisma) {
+                const cutoff = dbReadCutoffDate();
                 const storeForCanonical = stores.get(deviceId);
                 const canonicalId = storeForCanonical ? resolveCanonicalChatId(storeForCanonical, chatId) : chatId;
 
@@ -2628,7 +2948,7 @@ export class DeviceManager {
 
                 const take = Math.max(1, Math.min(500, Math.floor(Number(limit || 50))));
                 const msgs = await prisma.message.findMany({
-                    where: { deviceId, chatId: chatRow.id },
+                    where: { deviceId, chatId: chatRow.id, timestamp: { gte: cutoff } },
                     orderBy: { timestamp: 'desc' },
                     take
                 });
@@ -2656,7 +2976,8 @@ export class DeviceManager {
                             location,
                             senderName
                         };
-                    });
+                    })
+                    .filter((m: any) => Number(m?.timestamp || 0) >= dbReadCutoffMs());
             }
 
             // Obtener store del dispositivo
@@ -2677,7 +2998,9 @@ export class DeviceManager {
             // Tomar los últimos 'limit' mensajes
             const recentMessages = messages.slice(-limit);
 
-            return recentMessages.map((msg: any) => {
+            const cutoffMs = dbReadCutoffMs();
+            return recentMessages
+                .map((msg: any) => {
                 const locationMessage = msg.location
                     ? msg.location
                     : (msg.message as any)?.locationMessage || (msg.message as any)?.liveLocationMessage || null;
@@ -2691,6 +3014,7 @@ export class DeviceManager {
                     }
                     : null;
 
+                const timestamp = msg.timestamp || (msg.messageTimestamp ? Number(msg.messageTimestamp) * 1000 : Date.now());
                 return {
                     id: msg.key?.id || msg.id,
                     text: (() => {
@@ -2701,13 +3025,14 @@ export class DeviceManager {
                         return msg.text || computed || (location ? null : (msg.media ? null : '[Media]'));
                     })(),
                     fromMe: msg.fromMe ?? msg.key?.fromMe,
-                    timestamp: msg.timestamp || (msg.messageTimestamp ? Number(msg.messageTimestamp) * 1000 : Date.now()),
+                    timestamp,
                     source: msg.source || ((msg.fromMe ?? msg.key?.fromMe) ? 'phone' : 'contact'),
                     media: msg.media || null,
                     location,
                     senderName: msg.senderName || null
                 };
-            });
+            })
+                .filter((m: any) => Number(m?.timestamp || 0) >= cutoffMs);
         } catch (error) {
             console.error('Error al obtener mensajes:', error);
             return [];
@@ -2802,6 +3127,9 @@ export class DeviceManager {
         
         // Extraer el número base para actualizar TODOS los registros del mismo contacto
         const chatKey = chatKeyOf(canonicalChatId);
+        const normalizedNewName = customName ? customName.toLowerCase().trim() : null;
+        let mergeIntoChatId: string | null = null;
+        let mergeIntoChatDbId: string | null = null;
         
         // Intentar actualizar en la base de datos si está disponible
         const prisma = getPrisma();
@@ -2819,7 +3147,6 @@ export class DeviceManager {
                 
                 // 2. Si estamos poniendo un customName, buscar otros chats que YA tienen ese customName
                 //    (para fusionarlos - eliminar los duplicados)
-                const normalizedNewName = customName ? customName.toLowerCase().trim() : null;
                 const duplicatesByName = normalizedNewName 
                     ? allChats.filter(c => 
                         c.customName && 
@@ -2830,32 +3157,44 @@ export class DeviceManager {
                 
                 console.log(`[${deviceId}] Rename: key="${chatKey}", relacionados=${relatedByKey.length}, duplicados por nombre=${duplicatesByName.length}`);
                 
-                // 3. Actualizar todos los registros relacionados por key
-                if (relatedByKey.length > 0) {
-                    await prisma.chat.updateMany({
-                        where: { 
-                            deviceId,
-                            waChatId: { in: relatedByKey.map(c => c.waChatId) }
-                        },
-                        data: {
-                            customName: customName ? customName.trim() : null
+                if (normalizedNewName && duplicatesByName.length > 0) {
+                    const keep = duplicatesByName
+                        .slice()
+                        .sort((a, b) => Number(new Date(a.lastMessageAt).getTime()) - Number(new Date(b.lastMessageAt).getTime()))[0];
+                    mergeIntoChatId = String(keep?.waChatId || '') || null;
+                    mergeIntoChatDbId = String(keep?.id || '') || null;
+                    if (mergeIntoChatId && mergeIntoChatDbId) {
+                        const toDeleteChatDbIds = relatedByKey.map((c) => String(c.id)).filter(Boolean);
+                        if (toDeleteChatDbIds.length > 0) {
+                            console.log(
+                                `[${deviceId}] Merge por nombre "${customName}": moviendo mensajes (${toDeleteChatDbIds.length} chat(s)) hacia ${mergeIntoChatId}`
+                            );
+                            await prisma.message.updateMany({
+                                where: { chatId: { in: toDeleteChatDbIds } },
+                                data: { chatId: mergeIntoChatDbId }
+                            });
+                            await prisma.chat.deleteMany({
+                                where: { deviceId, id: { in: toDeleteChatDbIds } }
+                            });
                         }
-                    });
+                    } else {
+                        mergeIntoChatId = null;
+                        mergeIntoChatDbId = null;
+                    }
                 }
-                
-                // 4. Eliminar duplicados por nombre (mantener solo el más reciente, que es el que estamos renombrando)
-                if (duplicatesByName.length > 0) {
-                    console.log(`[${deviceId}] Eliminando ${duplicatesByName.length} chats duplicados con nombre "${customName}"`);
-                    for (const dup of duplicatesByName) {
-                        try {
-                            // Primero eliminar mensajes
-                            await prisma.message.deleteMany({ where: { chatId: dup.id } });
-                            // Luego eliminar el chat
-                            await prisma.chat.delete({ where: { id: dup.id } });
-                            console.log(`[${deviceId}] Eliminado duplicado: ${dup.waChatId}`);
-                        } catch (err) {
-                            console.warn(`[${deviceId}] Error eliminando duplicado ${dup.waChatId}:`, err);
-                        }
+
+                if (!mergeIntoChatId) {
+                    // 3. Actualizar todos los registros relacionados por key
+                    if (relatedByKey.length > 0) {
+                        await prisma.chat.updateMany({
+                            where: { 
+                                deviceId,
+                                waChatId: { in: relatedByKey.map(c => c.waChatId) }
+                            },
+                            data: {
+                                customName: customName ? customName.trim() : null
+                            }
+                        });
                     }
                 }
             } catch (dbError: any) {
@@ -2873,15 +3212,38 @@ export class DeviceManager {
         // SIEMPRE actualizar en el store de memoria
         if (store) {
             // Guardar el nombre personalizado en el store de contactos
-            if (customName) {
-                store.contacts.set(canonicalChatId, customName.trim());
+            if (customName && normalizedNewName) {
+                const existingSameName: string[] = [];
+                for (const [jid, name] of store.contacts.entries()) {
+                    if (!name) continue;
+                    const n = String(name).toLowerCase().trim();
+                    if (n === normalizedNewName && chatKeyOf(jid) !== chatKey) existingSameName.push(jid);
+                }
+                if (!mergeIntoChatId && existingSameName.length > 0) {
+                    const keep = existingSameName
+                        .slice()
+                        .sort((a, b) => Number(store.chats.get(a)?.conversationTimestamp || 0) - Number(store.chats.get(b)?.conversationTimestamp || 0))[0];
+                    mergeIntoChatId = keep || null;
+                }
+
+                if (mergeIntoChatId) {
+                    const to = resolveCanonicalChatId(store, mergeIntoChatId);
+                    mergeChatData(store, canonicalChatId, to);
+                    store.aliases.set(canonicalChatId, to);
+                    store.contacts.set(to, customName.trim());
+                } else {
+                    store.contacts.set(canonicalChatId, customName.trim());
+                }
             }
         }
         
-        console.log(`[${deviceId}] Chat ${canonicalChatId} (key: ${chatKey}) renombrado a: ${customName || '(sin nombre personalizado)'}`);
+        const finalChatId = mergeIntoChatId && store ? resolveCanonicalChatId(store, mergeIntoChatId) : canonicalChatId;
+        console.log(
+            `[${deviceId}] Chat ${canonicalChatId} (key: ${chatKey}) renombrado a: ${customName || '(sin nombre personalizado)'}${mergeIntoChatId ? ` (merge -> ${finalChatId})` : ''}`
+        );
         
         return { 
-            chatId: canonicalChatId, 
+            chatId: finalChatId, 
             customName: customName ? customName.trim() : null 
         };
     }
@@ -2895,6 +3257,7 @@ export class DeviceManager {
     }) {
         const prisma = getPrisma();
         if (prisma) {
+            const cutoff = dbReadCutoffDate();
             const q = String(query || '').trim();
             if (!q) return [];
 
@@ -2919,6 +3282,7 @@ export class DeviceManager {
                     deviceId,
                     ...(chatRow ? { chatId: chatRow.id } : {}),
                     ...(fromMeFilter === undefined ? {} : { fromMe: fromMeFilter }),
+                    timestamp: { gte: cutoff },
                     text: { contains: q }
                 },
                 orderBy: { timestamp: 'desc' },
@@ -2939,7 +3303,7 @@ export class DeviceManager {
                     timestamp: m.timestamp ? new Date(m.timestamp).getTime() : Date.now(),
                     matchHighlight: this.highlightMatch(text, q)
                 };
-            });
+            }).filter((m: any) => Number(m?.timestamp || 0) >= dbReadCutoffMs());
         }
 
         const store = stores.get(deviceId);
@@ -2952,6 +3316,7 @@ export class DeviceManager {
         const results: any[] = [];
         const searchQuery = query.toLowerCase().trim();
         const limit = options?.limit || 50;
+        const cutoffMs = dbReadCutoffMs();
 
         // Determinar en qué chats buscar
         let chatIds: string[] = [];
@@ -2966,6 +3331,8 @@ export class DeviceManager {
             const messages = store.messages.get(chatId) || [];
 
             for (const msg of messages) {
+                const msgTimestamp = msg.timestamp || (msg.messageTimestamp ? Number(msg.messageTimestamp) * 1000 : 0);
+                if (msgTimestamp && msgTimestamp < cutoffMs) continue;
                 // Filtrar por fromMe si se especifica
                 const msgFromMe = msg.fromMe ?? msg.key?.fromMe;
                 if (options?.fromMe !== undefined && msgFromMe !== options.fromMe) {

@@ -109,7 +109,8 @@ function App() {
             }
             
             const msgId = String(msg.id || `${Date.now()}-${Math.random()}`);
-            const senderName = msg.senderName || chatId.split('@')[0] || 'Desconocido';
+            const senderNameRaw = String(msg.senderName || '').trim();
+            const senderName = senderNameRaw && !/^\d+$/.test(senderNameRaw) ? senderNameRaw : 'Resolviendo...';
             const branchName = deviceNames.get(deviceId) || deviceId;
             
             console.log('[VisualNotifications] Agregando notificación:', { msgId, senderName, branchName });
