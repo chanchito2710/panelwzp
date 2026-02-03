@@ -352,19 +352,53 @@ export class DeviceManager {
         });
 
         try {
+            // Primero verificar si el chat ya existe y tiene un nombre establecido
+            const existingChat = await prisma.chat.findUnique({
+                where: { deviceId_waChatId: { deviceId, waChatId } },
+                select: { id: true, name: true, customName: true }
+            });
+            
+            // Determinar el nombre a usar:
+            // - Si hay customName, NUNCA sobrescribir el name
+            // - Si ya hay un name válido, solo actualizar si el nuevo es mejor (más largo/descriptivo)
+            // - Si no hay name, usar el nuevo
+            let nameToUse: string | null = null;
+            const newName = args.chatName ? String(args.chatName).trim() : null;
+            
+            if (existingChat) {
+                // Chat existe
+                if (existingChat.customName) {
+                    // Tiene customName, mantener el name original
+                    nameToUse = existingChat.name;
+                } else if (existingChat.name && existingChat.name.trim()) {
+                    // Tiene name, solo actualizar si el nuevo es más descriptivo
+                    // (evita que un pushName corto sobrescriba uno más completo)
+                    const existingLen = existingChat.name.trim().length;
+                    const newLen = newName ? newName.length : 0;
+                    nameToUse = newLen > existingLen ? newName : existingChat.name;
+                } else {
+                    // No tiene name, usar el nuevo
+                    nameToUse = newName;
+                }
+            } else {
+                // Chat nuevo
+                nameToUse = newName;
+            }
+            
             const chat = await prisma.chat.upsert({
                 where: { deviceId_waChatId: { deviceId, waChatId } },
                 create: {
                     deviceId,
                     waChatId,
-                    name: args.chatName ? String(args.chatName) : null,
+                    name: nameToUse,
                     isGroup: Boolean(args.isGroup),
                     unreadCount: Math.max(0, Math.floor(Number(args.unreadCount || 0))),
                     lastMessageAt: new Date(Number(args.lastMessageAtMs || Date.now())),
                     profilePhotoUrl: args.profilePhotoUrl ? String(args.profilePhotoUrl) : null
                 },
                 update: {
-                    name: args.chatName ? String(args.chatName) : null,
+                    // Solo actualizar name si determinamos que debe cambiar
+                    ...(nameToUse !== existingChat?.name ? { name: nameToUse } : {}),
                     isGroup: Boolean(args.isGroup),
                     unreadCount: Math.max(0, Math.floor(Number(args.unreadCount || 0))),
                     lastMessageAt: new Date(Number(args.lastMessageAtMs || Date.now())),

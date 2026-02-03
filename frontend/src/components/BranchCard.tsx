@@ -192,6 +192,16 @@ export const BranchCard: React.FC<BranchCardProps> = ({ device, onOpenFull, onRe
         return () => clearInterval(interval);
     }, [device.id, device.status]);
 
+    // Función para normalizar IDs de chat y evitar duplicados
+    const normalizeChatId = (id: string): string => {
+        if (!id) return '';
+        // Extraer el número base sin sufijos de WhatsApp
+        const base = id.split('@')[0] || id;
+        // Remover prefijos de LID si existen
+        const clean = base.split(':')[0] || base;
+        return clean;
+    };
+    
     // Socket para mensajes nuevos
     useEffect(() => {
         if (!socket) return;
@@ -201,6 +211,7 @@ export const BranchCard: React.FC<BranchCardProps> = ({ device, onOpenFull, onRe
             
             const msg = data.msg || {};
             const chatId = data.chatId || '';
+            const normalizedIncoming = normalizeChatId(chatId);
             
             // Incrementar contador solo si no es mensaje propio
             if (!msg.fromMe) {
@@ -213,18 +224,24 @@ export const BranchCard: React.FC<BranchCardProps> = ({ device, onOpenFull, onRe
             
             // Actualizar la lista de chats con el nuevo mensaje
             setChats(prevChats => {
-                const existingIndex = prevChats.findIndex(c => c.id === chatId);
+                // Buscar chat existente usando ID normalizado para evitar duplicados
+                const existingIndex = prevChats.findIndex(c => 
+                    normalizeChatId(c.id) === normalizedIncoming
+                );
+                
+                // Preservar el nombre existente si lo hay, sino usar senderName
+                const existingChat = existingIndex >= 0 ? prevChats[existingIndex] : null;
                 const senderName = msg.senderName || chatId.split('@')[0] || 'Desconocido';
                 
                 const updatedChat: Chat = {
-                    id: chatId,
-                    name: existingIndex >= 0 ? prevChats[existingIndex].name : senderName,
+                    id: existingChat?.id || chatId, // Mantener el ID original del chat existente
+                    name: existingChat?.name || senderName, // Preservar nombre existente
                     lastMessageTime: msg.timestamp || Date.now(),
-                    unreadCount: existingIndex >= 0 
-                        ? (msg.fromMe ? prevChats[existingIndex].unreadCount : prevChats[existingIndex].unreadCount + 1)
+                    unreadCount: existingChat 
+                        ? (msg.fromMe ? existingChat.unreadCount : existingChat.unreadCount + 1)
                         : (msg.fromMe ? 0 : 1),
                     isGroup: chatId.includes('@g.us'),
-                    profilePhotoUrl: existingIndex >= 0 ? prevChats[existingIndex].profilePhotoUrl : null,
+                    profilePhotoUrl: existingChat?.profilePhotoUrl || null,
                     lastMessage: msg.text || null,
                     lastMessageType: msg.type || 'text',
                     lastMessageFromMe: msg.fromMe || false,
