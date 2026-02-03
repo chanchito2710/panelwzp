@@ -97,6 +97,8 @@ export const ChatInterface = ({
     const [chats, setChats] = useState<Chat[]>([]);
     const [messages, setMessages] = useState<Message[]>([]);
     const chatsRef = useRef<Chat[]>([]);
+    // Guardar IDs de chats eliminados localmente para no volver a mostrarlos
+    const [deletedChatIds, setDeletedChatIds] = useState<Set<string>>(new Set());
     const [inputText, setInputText] = useState('');
     const [loading, setLoading] = useState(false);
     const [uploadingFile, setUploadingFile] = useState(false);
@@ -464,9 +466,11 @@ export const ChatInterface = ({
                 
                 // Solo actualizar si es un array válido
                 if (Array.isArray(data)) {
-                    console.log(`[fetchChats] ${data.length} chats cargados`);
-                    upsertBranchChats(device.id, data);
-                    setChats(data);
+                    // Filtrar chats eliminados localmente
+                    const filteredData = data.filter((c: Chat) => !deletedChatIds.has(c.id));
+                    console.log(`[fetchChats] ${data.length} chats cargados, ${filteredData.length} después de filtrar eliminados`);
+                    upsertBranchChats(device.id, filteredData);
+                    setChats(filteredData);
                 } else if (data?.error) {
                     console.error('[fetchChats] Error del servidor:', data.error);
                     // No borrar chats existentes
@@ -488,7 +492,8 @@ export const ChatInterface = ({
         } else {
             setChats([]);
         }
-    }, [device.id, currentDevice.status]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [device.id, currentDevice.status, deletedChatIds.size]);
 
     // Cargar mensajes cuando se selecciona un chat
     useEffect(() => {
@@ -1050,17 +1055,27 @@ export const ChatInterface = ({
 
     const handleDeleteChat = async (chatId: string) => {
         try {
-            const res = await apiFetch(`/api/devices/${device.id}/chats/${chatId}`, {
-                method: 'DELETE'
-            });
-            if (!res.ok) throw new Error('Error al eliminar chat');
+            // Primero agregar a la lista de eliminados para evitar que reaparezca
+            setDeletedChatIds(prev => new Set([...prev, chatId]));
             
+            // Eliminar de la lista local inmediatamente
             setChats(prev => prev.filter(c => c.id !== chatId));
             if (activeChat === chatId) setActiveChat(null);
+            
+            // Luego intentar eliminar del servidor
+            const res = await apiFetch(`/api/devices/${device.id}/chats/${encodeURIComponent(chatId)}`, {
+                method: 'DELETE'
+            });
+            
+            if (!res.ok) {
+                console.warn('No se pudo eliminar del servidor, pero se eliminó localmente');
+            }
+            
             messageApi.success('Chat eliminado');
         } catch (error) {
             console.error('Error eliminando chat:', error);
-            messageApi.error('No se pudo eliminar el chat');
+            // El chat ya se eliminó localmente, solo mostrar warning
+            messageApi.warning('Chat eliminado localmente');
         }
     };
 
