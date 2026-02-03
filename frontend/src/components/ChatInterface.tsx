@@ -467,8 +467,22 @@ export const ChatInterface = ({
                 // Solo actualizar si es un array válido
                 if (Array.isArray(data)) {
                     // Filtrar chats eliminados localmente
-                    const filteredData = data.filter((c: Chat) => !deletedChatIds.has(c.id));
-                    console.log(`[fetchChats] ${data.length} chats cargados, ${filteredData.length} después de filtrar eliminados`);
+                    let filteredData = data.filter((c: Chat) => !deletedChatIds.has(c.id));
+                    
+                    // DEDUPLICACIÓN: eliminar duplicados basándose en la clave normalizada
+                    // Mantener el primer chat de cada clave (el más reciente por orden del servidor)
+                    const seenKeys = new Set<string>();
+                    filteredData = filteredData.filter((c: Chat) => {
+                        const key = getChatKey(c.id);
+                        if (seenKeys.has(key)) {
+                            console.log(`[fetchChats] Duplicado eliminado: ${c.id} (key: ${key})`);
+                            return false;
+                        }
+                        seenKeys.add(key);
+                        return true;
+                    });
+                    
+                    console.log(`[fetchChats] ${data.length} chats cargados, ${filteredData.length} después de filtrar/deduplicar`);
                     upsertBranchChats(device.id, filteredData);
                     setChats(filteredData);
                 } else if (data?.error) {
@@ -754,19 +768,48 @@ export const ChatInterface = ({
                 // Actualizar lista de chats - unificar solo por clave segura (evita mezclar LIDs/grupos)
                 setChats(prev => {
                     const incomingKey = getChatKey(data.chatId);
-                    const existingChat = prev.find(c => getChatKey(c.id) === incomingKey);
-                    if (existingChat) {
-                        // Actualizar chat existente y moverlo al principio
-                        return [
-                            { ...existingChat, id: data.chatId, lastMessageTime: data.msg.timestamp },
-                            ...prev.filter(c => getChatKey(c.id) !== incomingKey)
-                        ];
+                    const existingIndex = prev.findIndex(c => getChatKey(c.id) === incomingKey);
+                    
+                    // Inferir tipo de mensaje
+                    const inferMessageType = (msg: any): string => {
+                        if (msg.media?.mimeType) {
+                            const mime = msg.media.mimeType;
+                            if (mime.startsWith('audio/')) return 'audio';
+                            if (mime.startsWith('image/')) return 'image';
+                            if (mime.startsWith('video/')) return 'video';
+                            return 'document';
+                        }
+                        if (msg.location) return 'location';
+                        return 'text';
+                    };
+                    
+                    const msgType = inferMessageType(data.msg);
+                    
+                    if (existingIndex >= 0) {
+                        // Chat existente - MANTENER el ID original, solo actualizar timestamp y contenido
+                        const existingChat = prev[existingIndex];
+                        const updatedChat: Chat = {
+                            ...existingChat,
+                            // CRÍTICO: NO cambiar el ID - mantener el original para evitar duplicados
+                            lastMessageTime: data.msg.timestamp,
+                            lastMessage: data.msg.text || existingChat.lastMessage,
+                            lastMessageType: msgType || existingChat.lastMessageType,
+                            lastMessageFromMe: data.msg.fromMe,
+                            unreadCount: data.msg.fromMe ? existingChat.unreadCount : existingChat.unreadCount + 1
+                        };
+                        // Mover al principio sin crear duplicados
+                        const filtered = prev.filter((_, i) => i !== existingIndex);
+                        return [updatedChat, ...filtered];
                     } else {
-                        // Agregar nuevo chat
+                        // Chat nuevo - usar el nombre del sender si está disponible
+                        const senderName = data.msg.senderName || data.chatId.split('@')[0] || 'Desconocido';
                         const newChat: Chat = {
                             id: data.chatId,
-                            name: data.chatId.replace('@s.whatsapp.net', '').replace('@lid', '').replace('@g.us', ''),
+                            name: senderName,
                             lastMessageTime: data.msg.timestamp,
+                            lastMessage: data.msg.text || null,
+                            lastMessageType: msgType,
+                            lastMessageFromMe: data.msg.fromMe,
                             unreadCount: data.msg.fromMe ? 0 : 1,
                             isGroup: data.chatId.includes('@g.us')
                         };

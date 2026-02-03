@@ -2371,7 +2371,45 @@ export class DeviceManager {
                 };
             }).filter((c): c is NonNullable<typeof c> => c !== null); // Eliminar nulls con type guard
 
-            const sorted = result.sort((a, b) => b.lastMessageTime - a.lastMessageTime);
+            // DEDUPLICACIÓN: eliminar chats duplicados basándose en el número de teléfono
+            // Mantener el más reciente de cada número
+            const getChatKey = (id: string): string => {
+                if (!id) return '';
+                if (id.includes('@g.us')) return id; // Grupos son únicos
+                const prefix = id.split('@')[0] || id;
+                return prefix.split(':')[0] || prefix; // Extraer número base
+            };
+            
+            const seenKeys = new Map<string, typeof result[0]>();
+            for (const chat of result) {
+                const key = getChatKey(chat.id);
+                const existing = seenKeys.get(key);
+                
+                // Si ya existe uno, mantener el más reciente con el mejor nombre
+                if (existing) {
+                    const existingHasRealName = existing.name && !/^\d+$/.test(existing.name);
+                    const chatHasRealName = chat.name && !/^\d+$/.test(chat.name);
+                    
+                    if (chat.lastMessageTime > existing.lastMessageTime) {
+                        // El nuevo es más reciente
+                        if (existingHasRealName && !chatHasRealName) {
+                            // Pero el existente tiene mejor nombre, combinar
+                            seenKeys.set(key, { ...chat, name: existing.name });
+                        } else {
+                            seenKeys.set(key, chat);
+                        }
+                    } else if (chatHasRealName && !existingHasRealName) {
+                        // El existente es más reciente pero el nuevo tiene mejor nombre
+                        seenKeys.set(key, { ...existing, name: chat.name });
+                    }
+                    // Si no cambiamos nada, existing se mantiene
+                } else {
+                    seenKeys.set(key, chat);
+                }
+            }
+            
+            const deduplicated = Array.from(seenKeys.values());
+            const sorted = deduplicated.sort((a, b) => b.lastMessageTime - a.lastMessageTime);
             for (const chat of sorted.slice(0, 15)) {
                 if (chat.isGroup) continue;
                 if (chat.profilePhotoUrl) continue;
