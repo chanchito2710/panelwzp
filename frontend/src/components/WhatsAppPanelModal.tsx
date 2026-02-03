@@ -513,11 +513,12 @@ export const WhatsAppPanelModal = ({ visible, onClose }: { visible: boolean, onC
                                 src={panelLogo} 
                                 alt="Logo" 
                                 style={{ 
-                                    height: 36, 
+                                    height: 180, 
                                     width: 'auto', 
-                                    maxWidth: 120,
+                                    maxWidth: 600,
                                     objectFit: 'contain',
-                                    borderRadius: 4
+                                    borderRadius: 8,
+                                    filter: 'drop-shadow(0 4px 12px rgba(212, 175, 55, 0.3))'
                                 }} 
                             />
                         )}

@@ -132,6 +132,10 @@ interface Chat {
     unreadCount: number;
     isGroup: boolean;
     profilePhotoUrl?: string | null;
+    lastMessage?: string | null;
+    lastMessageType?: string;
+    lastMessageFromMe?: boolean;
+    lastMessageMedia?: { mimeType?: string; duration?: number } | null;
 }
 
 interface BranchCardProps {
@@ -418,24 +422,87 @@ export const BranchCard: React.FC<BranchCardProps> = ({ device, onOpenFull, onRe
                                         {chat.name.substring(0, 1).toUpperCase()}
                                     </Avatar>
                                     <div style={{ flex: 1, overflow: 'hidden' }}>
-                                        <div style={{ 
-                                            fontSize: 12, 
-                                            color: '#f5e6c8',
-                                            overflow: 'hidden',
-                                            textOverflow: 'ellipsis',
-                                            whiteSpace: 'nowrap',
-                                            fontFamily: "'Crimson Text', Georgia, serif",
-                                            fontWeight: 600
-                                        }}>
-                                            {chat.name}
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+                                            <div style={{ 
+                                                fontSize: 12, 
+                                                color: '#f5e6c8',
+                                                overflow: 'hidden',
+                                                textOverflow: 'ellipsis',
+                                                whiteSpace: 'nowrap',
+                                                fontFamily: "'Crimson Text', Georgia, serif",
+                                                fontWeight: 600,
+                                                flex: 1
+                                            }}>
+                                                {chat.name}
+                                            </div>
+                                            <div style={{ 
+                                                fontSize: 9, 
+                                                color: '#8b7b65',
+                                                fontFamily: "'Source Serif Pro', Georgia, serif",
+                                                fontStyle: 'italic',
+                                                flexShrink: 0
+                                            }}>
+                                                {new Date(chat.lastMessageTime).toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit' })}
+                                            </div>
                                         </div>
                                         <div style={{ 
                                             fontSize: 10, 
-                                            color: '#8b7b65',
-                                            fontFamily: "'Source Serif Pro', Georgia, serif",
-                                            fontStyle: 'italic'
+                                            color: '#9a8b7a',
+                                            overflow: 'hidden',
+                                            textOverflow: 'ellipsis',
+                                            whiteSpace: 'nowrap',
+                                            marginTop: 2,
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            gap: 4
                                         }}>
-                                            {new Date(chat.lastMessageTime).toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit' })}
+                                            {chat.lastMessageFromMe && <span style={{ color: '#00d26a' }}>✓</span>}
+                                            {(() => {
+                                                const type = chat.lastMessageType || 'text';
+                                                const media = chat.lastMessageMedia;
+                                                
+                                                // Audio
+                                                if (type === 'audio' || media?.mimeType?.startsWith('audio/')) {
+                                                    const duration = media?.duration;
+                                                    const formatDuration = (s: number) => {
+                                                        const m = Math.floor(s / 60);
+                                                        const sec = Math.floor(s % 60);
+                                                        return `${m}:${sec.toString().padStart(2, '0')}`;
+                                                    };
+                                                    return (
+                                                        <span>🎤 {duration ? formatDuration(duration) : 'Audio'}</span>
+                                                    );
+                                                }
+                                                // Imagen
+                                                if (type === 'image' || media?.mimeType?.startsWith('image/')) {
+                                                    return <span>📷 Imagen</span>;
+                                                }
+                                                // Video
+                                                if (type === 'video' || media?.mimeType?.startsWith('video/')) {
+                                                    return <span>🎥 Video</span>;
+                                                }
+                                                // Documento
+                                                if (type === 'document') {
+                                                    return <span>📄 Documento</span>;
+                                                }
+                                                // Sticker
+                                                if (type === 'sticker') {
+                                                    return <span>🎭 Sticker</span>;
+                                                }
+                                                // Ubicación
+                                                if (type === 'location') {
+                                                    return <span>📍 Ubicación</span>;
+                                                }
+                                                // Contacto
+                                                if (type === 'contact') {
+                                                    return <span>👤 Contacto</span>;
+                                                }
+                                                // Texto
+                                                if (chat.lastMessage) {
+                                                    return <span>{chat.lastMessage}</span>;
+                                                }
+                                                return <span style={{ opacity: 0.5 }}>Sin mensajes</span>;
+                                            })()}
                                         </div>
                                     </div>
                                 </div>
