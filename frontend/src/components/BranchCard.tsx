@@ -311,9 +311,18 @@ export const BranchCard: React.FC<BranchCardProps> = ({ device, onOpenFull, onRe
                 setTotalUnread(data.totalUnread);
             }
         };
+
+        const handleChatUpdate = (data: any) => {
+            if (data?.deviceId !== device.id) return;
+            const incomingKey = normalizeChatId(String(data?.chatId || ''));
+            if (!incomingKey) return;
+            const patch = data?.patch || {};
+            setChats(prevChats => prevChats.map(c => (normalizeChatId(c.id) === incomingKey ? { ...c, ...patch } : c)));
+        };
         
         socket.on('message:new', handleNewMessage);
         socket.on('device:unread:update', handleUnreadUpdate);
+        socket.on('chat:update', handleChatUpdate);
         socket.on('chat:name:update', (data: { deviceId: string; chatId: string; name: string }) => {
             if (data.deviceId !== device.id) return;
             const nextName = String(data.name || '').trim();
@@ -331,6 +340,7 @@ export const BranchCard: React.FC<BranchCardProps> = ({ device, onOpenFull, onRe
             socket.off('message:new', handleNewMessage); 
             socket.off('device:unread:update', handleUnreadUpdate);
             socket.off('chat:name:update');
+            socket.off('chat:update', handleChatUpdate);
         };
     }, [socket, device.id]);
 

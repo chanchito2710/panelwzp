@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import express from 'express';
 import http from 'http';
 import { Server } from 'socket.io';
@@ -92,6 +93,14 @@ app.use(cors(corsOptions));
 app.options(/.*/, cors(corsOptions));
 app.use(express.json());
 ensureDir(DB_ROOT);
+try {
+    const debugAuth = String(process.env.APP_DEBUG_AUTH || '').trim() === '1';
+    if (debugAuth || process.env.NODE_ENV !== 'production') {
+        const owner = getOwnerUser();
+        const hasPass = Boolean(getOwnerPassword());
+        console.log(`[Auth] OWNER username="${owner.username}" passwordConfigured=${hasPass}`);
+    }
+} catch {}
 app.use('/storage', express.static(path.join(DB_ROOT, 'storage')));
 
 app.post('/api/auth/login', async (req, res) => {

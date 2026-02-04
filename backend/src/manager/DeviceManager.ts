@@ -1609,10 +1609,8 @@ export class DeviceManager {
                 // Ignorar mensajes de status/broadcast
                 if (originalChatId === 'status@broadcast') continue;
 
-                // Ignorar mensajes de protocolo (confirmaciones, recibos de lectura, etc.)
                 const msgType = Object.keys(msg.message || {})[0];
-                if (msgType === 'protocolMessage' || msgType === 'senderKeyDistributionMessage') {
-                    console.log(`[${deviceId}] Ignorando mensaje de protocolo: ${msgType}`);
+                if (msgType === 'senderKeyDistributionMessage') {
                     continue;
                 }
 
@@ -1647,6 +1645,105 @@ export class DeviceManager {
                     if (unifiedChatId !== chatId) {
                         mergeChatData(store, chatId, unifiedChatId);
                     }
+                }
+
+                if (msgType === 'protocolMessage') {
+                    const prisma = getPrisma();
+                    const pm = (msg.message as any)?.protocolMessage || {};
+                    const pmType = pm?.type;
+                    const refKey = pm?.key || {};
+                    const refId = String(refKey?.id || '').trim();
+                    const refRemoteJid = String(refKey?.remoteJid || originalChatId || '').trim();
+                    if (!refId || !refRemoteJid) continue;
+
+                    const canonicalRefChatId = store ? resolveCanonicalChatId(store, refRemoteJid) : refRemoteJid;
+
+                    const findChatIdByMsgId = (messageId: string) => {
+                        if (!store) return canonicalRefChatId;
+                        for (const [cid, msgs] of store.messages.entries()) {
+                            for (const m2 of msgs) {
+                                const id2 = m2?.key?.id || m2?.id;
+                                if (id2 === messageId) return cid;
+                            }
+                        }
+                        return canonicalRefChatId;
+                    };
+
+                    const chatIdForEvent = findChatIdByMsgId(refId);
+                    const patchForEvent: any = {};
+
+                    if (pmType === WAProto.Message.ProtocolMessage.Type.REVOKE) {
+                        const deletedText = '(mensaje eliminado)';
+                        if (store) {
+                            const target = this.findMessageById(deviceId, canonicalRefChatId, refId);
+                            if (target) {
+                                target.message = undefined;
+                                target.text = deletedText;
+                                target.type = 'deleted';
+                            }
+                            const chat = store.chats.get(chatIdForEvent);
+                            if (chat) {
+                                chat.lastMessageId = chat.lastMessageId || null;
+                                store.chats.set(chatIdForEvent, chat);
+                            }
+                        }
+                        if (prisma) {
+                            void prisma.message
+                                .updateMany({ where: { waMessageId: refId }, data: { type: 'deleted', text: deletedText } })
+                                .catch(() => {});
+                        }
+                        patchForEvent.text = deletedText;
+                        patchForEvent.type = 'deleted';
+                    }
+
+                    if (pmType === WAProto.Message.ProtocolMessage.Type.MESSAGE_EDIT && pm?.editedMessage) {
+                        const fakeEdited = { key: { ...msg.key, remoteJid: canonicalRefChatId, id: refId }, message: pm.editedMessage } as any;
+                        const newText = this.extractDisplayText(fakeEdited);
+                        const editedType = String(Object.keys(pm.editedMessage || {})[0] || 'text');
+                        const ts = pm?.timestampMs ? Number(pm.timestampMs) : (msg.messageTimestamp ? Number(msg.messageTimestamp) * 1000 : Date.now());
+
+                        if (store) {
+                            const target = this.findMessageById(deviceId, canonicalRefChatId, refId);
+                            if (target) {
+                                target.message = pm.editedMessage;
+                                target.text = newText;
+                                target.type = editedType;
+                                target.timestamp = ts;
+                            }
+                            const chat = store.chats.get(chatIdForEvent);
+                            if (chat) {
+                                chat.conversationTimestamp = Math.max(Number(chat.conversationTimestamp || 0), ts);
+                                if (chat.lastMessageId === refId) {
+                                    chat.lastMessageId = refId;
+                                }
+                                store.chats.set(chatIdForEvent, chat);
+                            }
+                        }
+
+                        if (prisma) {
+                            void prisma.message
+                                .updateMany({ where: { waMessageId: refId }, data: { type: editedType, text: newText ?? null, timestamp: new Date(ts) } })
+                                .catch(() => {});
+                        }
+
+                        patchForEvent.text = newText ?? null;
+                        patchForEvent.type = editedType;
+                        patchForEvent.timestamp = ts;
+                    }
+
+                    if (Object.keys(patchForEvent).length > 0) {
+                        const isLastMessage = Boolean(store && store.chats.get(chatIdForEvent)?.lastMessageId === refId);
+                        const chatLastMessageId = store ? String(store.chats.get(chatIdForEvent)?.lastMessageId || '') : '';
+                        this.io?.emit('message:update', {
+                            deviceId,
+                            chatId: chatIdForEvent,
+                            msgId: refId,
+                            isLastMessage,
+                            chatLastMessageId: chatLastMessageId || null,
+                            patch: patchForEvent
+                        });
+                    }
+                    continue;
                 }
 
                 const mediaMetadata = await this.handleMedia(deviceId, msg);
@@ -1745,7 +1842,10 @@ export class DeviceManager {
                         id: unifiedChatId,
                         name: chatName,
                         conversationTimestamp: timestamp,
-                        unreadCount: 0
+                        unreadCount: 0,
+                        lastInboundMessageId: null,
+                        lastOutboundMessageId: null,
+                        lastMessageId: null
                     };
                     
                     // Actualizar nombre si encontramos uno mejor
@@ -1755,6 +1855,11 @@ export class DeviceManager {
                     
                     existingChat.conversationTimestamp = timestamp;
                     if (!fromMe) existingChat.unreadCount++;
+                    if (msg.key?.id) {
+                        if (fromMe) existingChat.lastOutboundMessageId = msg.key.id;
+                        else existingChat.lastInboundMessageId = msg.key.id;
+                        existingChat.lastMessageId = msg.key.id;
+                    }
                     store.chats.set(unifiedChatId, existingChat);
 
                     // Guardar mensaje bajo el unifiedChatId
@@ -1842,6 +1947,117 @@ export class DeviceManager {
             }
         });
 
+        sock.ev.on('messages.update', async (updates: any[]) => {
+            const store = stores.get(deviceId);
+            const prisma = getPrisma();
+
+            const statusToString = (s: any): string | null => {
+                if (s === null || s === undefined) return null;
+                const n = Number(s);
+                if (!Number.isFinite(n)) return String(s);
+                if (n === 0) return 'error';
+                if (n === 1) return 'pending';
+                if (n === 2) return 'sent';
+                if (n === 3) return 'delivered';
+                if (n === 4) return 'read';
+                if (n === 5) return 'played';
+                return String(n);
+            };
+
+            const findById = (messageId: string) => {
+                if (!store) return null;
+                for (const [cid, msgs] of store.messages.entries()) {
+                    for (const m of msgs) {
+                        const id = m?.key?.id || m?.id;
+                        if (id === messageId) return { chatId: cid, msg: m };
+                    }
+                }
+                return null;
+            };
+
+            for (const u of updates || []) {
+                const key = u?.key || {};
+                const msgId = String(key?.id || '').trim();
+                const remoteJid = String(key?.remoteJid || '').trim();
+                if (!msgId || remoteJid === 'status@broadcast') continue;
+
+                const upd = u?.update || {};
+
+                const found = findById(msgId);
+                const chatIdForEvent = String(found?.chatId || (store ? resolveCanonicalChatId(store, remoteJid) : remoteJid) || remoteJid).trim();
+                const patchForEvent: any = {};
+                if (store && found?.chatId) {
+                    const chat = store.chats.get(found.chatId);
+                    if (chat) {
+                        chat.conversationTimestamp = Math.max(Number(chat.conversationTimestamp || 0), Date.now());
+                        if (Number.isFinite(Number(chat.conversationTimestamp))) {
+                            if (upd?.messageTimestamp) {
+                                const ts = Number(upd.messageTimestamp) * 1000;
+                                if (Number.isFinite(ts) && ts >= Number(chat.conversationTimestamp || 0)) {
+                                    chat.conversationTimestamp = ts;
+                                    chat.lastMessageId = msgId;
+                                }
+                            }
+                        }
+                        store.chats.set(found.chatId, chat);
+                    }
+                }
+
+                if (upd?.status !== undefined) {
+                    const st = statusToString(upd.status);
+                    if (found?.msg) {
+                        found.msg.status = st;
+                    }
+                    if (st) patchForEvent.status = st;
+                    if (prisma && st) {
+                        void prisma.message.updateMany({ where: { waMessageId: msgId }, data: { status: st } }).catch(() => {});
+                    }
+                }
+
+                if (upd?.message) {
+                    const fake = { key: { ...key, remoteJid: found?.chatId || remoteJid }, message: upd.message, messageTimestamp: upd?.messageTimestamp } as any;
+                    const newText = this.extractDisplayText(fake);
+                    const msgType = String(Object.keys(upd.message || {})[0] || 'text');
+                    const ts = upd?.messageTimestamp ? Number(upd.messageTimestamp) * 1000 : Date.now();
+
+                    if (found?.msg) {
+                        found.msg.message = upd.message;
+                        found.msg.messageTimestamp = upd?.messageTimestamp ?? found.msg.messageTimestamp;
+                        found.msg.text = newText;
+                        found.msg.timestamp = ts;
+                    }
+
+                    patchForEvent.text = newText ?? null;
+                    patchForEvent.type = msgType;
+                    patchForEvent.timestamp = ts;
+
+                    if (prisma) {
+                        void prisma.message.updateMany({
+                            where: { waMessageId: msgId },
+                            data: {
+                                type: msgType,
+                                text: newText ?? null,
+                                timestamp: new Date(ts)
+                            }
+                        }).catch(() => {});
+                    }
+                }
+
+                if (Object.keys(patchForEvent).length > 0) {
+                    const isLastMessage = Boolean(store && chatIdForEvent && store.chats.get(chatIdForEvent)?.lastMessageId === msgId);
+                    const chatLastMessageId = store && chatIdForEvent ? String(store.chats.get(chatIdForEvent)?.lastMessageId || '') : '';
+                    this.io?.emit('message:update', {
+                        deviceId,
+                        chatId: chatIdForEvent,
+                        msgId,
+                        isLastMessage,
+                        chatLastMessageId: chatLastMessageId || null,
+                        patch: patchForEvent
+                    });
+                }
+            }
+        });
+
         sock.ev.on('presence.update', (p) => {
             this.io?.emit('presence:update', { deviceId, ...p });
         });
@@ -1866,14 +2082,17 @@ export class DeviceManager {
         sock.ev.on('chats.update', (updates: any[]) => {
             const store = stores.get(deviceId);
             if (!store) return;
+            const prisma = getPrisma();
 
             let changed = false;
             for (const upd of updates) {
                 const id = String(upd?.id || '');
                 if (!id) continue;
 
-                const incomingUnread = upd?.unreadCount;
-                if (incomingUnread !== 0) continue;
+                const incomingUnreadRaw = upd?.unreadCount;
+                const incomingUnread =
+                    incomingUnreadRaw === null || incomingUnreadRaw === undefined ? null : Math.max(0, Math.floor(Number(incomingUnreadRaw)));
+                if (incomingUnread === null || !Number.isFinite(incomingUnread)) continue;
 
                 const incomingKey = chatKeyOf(id);
                 const existingId = Array.from(store.chats.keys()).find((cid) => chatKeyOf(cid) === incomingKey) || id;
@@ -1881,10 +2100,20 @@ export class DeviceManager {
                 const chat = store.chats.get(existingId);
                 if (!chat) continue;
 
-                if (Number(chat.unreadCount || 0) > 0) {
-                    chat.unreadCount = 0;
+                if (Number(chat.unreadCount || 0) !== incomingUnread) {
+                    chat.unreadCount = incomingUnread;
                     store.chats.set(existingId, chat);
                     changed = true;
+                    if (prisma) {
+                        void prisma.chat
+                            .updateMany({ where: { deviceId, waChatId: existingId }, data: { unreadCount: incomingUnread } })
+                            .catch(() => {});
+                    }
+                    this.io?.emit('chat:update', {
+                        deviceId,
+                        chatId: existingId,
+                        patch: { unreadCount: incomingUnread, lastMessageTime: Number(chat.conversationTimestamp || 0) || Date.now() }
+                    });
                 }
             }
 
@@ -2060,41 +2289,24 @@ export class DeviceManager {
 
         try {
             this.rememberPanelSend(deviceId, targetJid, { text, timestamp: Date.now() });
-            
-            // Construir mensaje con posible quote
-            const messageContent: any = { text };
-            
-            // Si hay quotedMessageId, buscar el mensaje original y agregar contextInfo
+
+            let quoted: any = undefined;
             if (quotedMessageId) {
                 const originalMsg = this.findMessageById(deviceId, canonicalChatId, quotedMessageId);
                 console.log(`[${deviceId}] Mensaje original encontrado:`, originalMsg ? 'SÍ' : 'NO');
-                
-                if (originalMsg && originalMsg.message) {
-                    // Determinar el participante correcto
-                    const participant = originalMsg.key?.participant || originalMsg.key?.remoteJid || targetJid;
-                    
-                    messageContent.contextInfo = {
-                        quotedMessage: originalMsg.message,
-                        stanzaId: quotedMessageId,
-                        participant: participant
+                if (originalMsg?.message) {
+                    quoted = originalMsg;
+                } else if (originalMsg?.text) {
+                    quoted = {
+                        key: originalMsg.key || { remoteJid: targetJid, id: quotedMessageId, fromMe: false },
+                        message: { conversation: originalMsg.text }
                     };
-                    console.log(`[${deviceId}] contextInfo configurado - stanzaId: ${quotedMessageId}, participant: ${participant}`);
-                } else if (originalMsg) {
-                    // Si no tiene .message pero existe, intentar construir uno básico
-                    console.log(`[${deviceId}] Mensaje encontrado pero sin .message, intentando con texto`);
-                    if (originalMsg.text) {
-                        messageContent.contextInfo = {
-                            quotedMessage: { conversation: originalMsg.text },
-                            stanzaId: quotedMessageId,
-                            participant: originalMsg.key?.participant || originalMsg.key?.remoteJid || targetJid
-                        };
-                    }
                 } else {
                     console.log(`[${deviceId}] No se encontró el mensaje original ${quotedMessageId} - enviando sin quote`);
                 }
             }
-            
-            const result = await sock.sendMessage(targetJid, messageContent);
+
+            const result = await sock.sendMessage(targetJid, { text }, quoted ? { quoted } : undefined);
             const msgId = result?.key?.id as string | undefined;
             if (msgId) this.rememberPanelSend(deviceId, targetJid, { id: msgId, text, timestamp: Date.now() });
             console.log(`[${deviceId}] Mensaje enviado, result:`, result?.key);

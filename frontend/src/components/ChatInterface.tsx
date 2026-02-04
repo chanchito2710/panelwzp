@@ -853,6 +853,34 @@ export const ChatInterface = ({
             }
         });
 
+        socket.on('message:update', (data: { deviceId: string; chatId: string; msgId: string; isLastMessage?: boolean; chatLastMessageId?: string | null; patch: Partial<Message> }) => {
+            if (data.deviceId !== device.id) return;
+            const incomingKey = getChatKey(String(data.chatId || ''));
+            const activeKey = getChatKey(activeChat);
+            const isSameChat = incomingKey && activeKey && incomingKey === activeKey;
+
+            if (isSameChat) {
+                setMessages(prev => prev.map(m => (m.id === data.msgId ? { ...m, ...data.patch } : m)));
+            }
+
+            setChats(prev => {
+                const idx = prev.findIndex(c => getChatKey(c.id) === incomingKey);
+                if (idx < 0) return prev;
+                const existing = prev[idx];
+                const next: Chat = { ...existing };
+                const patchAny: any = data.patch || {};
+                const isLast = Boolean(data.isLastMessage) || (data.chatLastMessageId && data.chatLastMessageId === data.msgId);
+                if (isLast) {
+                    if (typeof patchAny.text === 'string') next.lastMessage = patchAny.text;
+                    if (typeof patchAny.timestamp === 'number') next.lastMessageTime = patchAny.timestamp;
+                } else if (typeof patchAny.timestamp === 'number' && existing.lastMessageTime === patchAny.timestamp && typeof patchAny.text === 'string') {
+                    next.lastMessage = patchAny.text;
+                }
+                const filtered = prev.filter((_, i) => i !== idx);
+                return [next, ...filtered];
+            });
+        });
+
         socket.on('chat:name:update', (data: { deviceId: string; chatId: string; name: string }) => {
             if (data.deviceId !== device.id) return;
             const nextName = String(data.name || '').trim();
@@ -860,6 +888,13 @@ export const ChatInterface = ({
             const incomingKey = getChatKey(data.chatId);
             if (!incomingKey) return;
             setChats(prev => prev.map(c => (getChatKey(c.id) === incomingKey ? { ...c, name: nextName } : c)));
+        });
+
+        socket.on('chat:update', (data: { deviceId: string; chatId: string; patch: Partial<Chat> }) => {
+            if (data.deviceId !== device.id) return;
+            const incomingKey = getChatKey(String(data.chatId || ''));
+            if (!incomingKey) return;
+            setChats(prev => prev.map(c => (getChatKey(c.id) === incomingKey ? { ...c, ...data.patch } : c)));
         });
 
         socket.on('presence:update', (data: { deviceId: string, id: string, presences: any }) => {
@@ -872,8 +907,10 @@ export const ChatInterface = ({
 
         return () => {
             socket.off('message:new');
+            socket.off('message:update');
             socket.off('presence:update');
             socket.off('chat:name:update');
+            socket.off('chat:update');
         };
     }, [socket, device.id, activeChat]);
 
