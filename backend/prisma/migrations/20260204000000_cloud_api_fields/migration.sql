@@ -1,0 +1,10 @@
+ALTER TABLE `Device`
+  ADD COLUMN `providerType` VARCHAR(191) NOT NULL DEFAULT 'BAILEYS',
+  ADD COLUMN `cloudPhoneNumberId` VARCHAR(191) NULL,
+  ADD COLUMN `cloudBusinessAccountId` VARCHAR(191) NULL,
+  ADD COLUMN `cloudAccessTokenEnc` LONGTEXT NULL,
+  ADD COLUMN `cloudVerifyToken` VARCHAR(191) NULL;
+
+ALTER TABLE `Message`
+  ADD COLUMN `contextWaMessageId` VARCHAR(191) NULL;
+

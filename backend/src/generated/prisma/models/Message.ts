@@ -29,6 +29,7 @@ export type MessageMinAggregateOutputType = {
   deviceId: string | null
   chatId: string | null
   waMessageId: string | null
+  contextWaMessageId: string | null
   fromMe: boolean | null
   source: string | null
   type: string | null
@@ -44,6 +45,7 @@ export type MessageMaxAggregateOutputType = {
   deviceId: string | null
   chatId: string | null
   waMessageId: string | null
+  contextWaMessageId: string | null
   fromMe: boolean | null
   source: string | null
   type: string | null
@@ -59,6 +61,7 @@ export type MessageCountAggregateOutputType = {
   deviceId: number
   chatId: number
   waMessageId: number
+  contextWaMessageId: number
   fromMe: number
   source: number
   type: number
@@ -76,6 +79,7 @@ export type MessageMinAggregateInputType = {
   deviceId?: true
   chatId?: true
   waMessageId?: true
+  contextWaMessageId?: true
   fromMe?: true
   source?: true
   type?: true
@@ -91,6 +95,7 @@ export type MessageMaxAggregateInputType = {
   deviceId?: true
   chatId?: true
   waMessageId?: true
+  contextWaMessageId?: true
   fromMe?: true
   source?: true
   type?: true
@@ -106,6 +111,7 @@ export type MessageCountAggregateInputType = {
   deviceId?: true
   chatId?: true
   waMessageId?: true
+  contextWaMessageId?: true
   fromMe?: true
   source?: true
   type?: true
@@ -194,6 +200,7 @@ export type MessageGroupByOutputType = {
   deviceId: string
   chatId: string
   waMessageId: string
+  contextWaMessageId: string | null
   fromMe: boolean
   source: string
   type: string
@@ -230,6 +237,7 @@ export type MessageWhereInput = {
   deviceId?: Prisma.StringFilter<"Message"> | string
   chatId?: Prisma.StringFilter<"Message"> | string
   waMessageId?: Prisma.StringFilter<"Message"> | string
+  contextWaMessageId?: Prisma.StringNullableFilter<"Message"> | string | null
   fromMe?: Prisma.BoolFilter<"Message"> | boolean
   source?: Prisma.StringFilter<"Message"> | string
   type?: Prisma.StringFilter<"Message"> | string
@@ -247,6 +255,7 @@ export type MessageOrderByWithRelationInput = {
   deviceId?: Prisma.SortOrder
   chatId?: Prisma.SortOrder
   waMessageId?: Prisma.SortOrder
+  contextWaMessageId?: Prisma.SortOrderInput | Prisma.SortOrder
   fromMe?: Prisma.SortOrder
   source?: Prisma.SortOrder
   type?: Prisma.SortOrder
@@ -268,6 +277,7 @@ export type MessageWhereUniqueInput = Prisma.AtLeast<{
   NOT?: Prisma.MessageWhereInput | Prisma.MessageWhereInput[]
   deviceId?: Prisma.StringFilter<"Message"> | string
   chatId?: Prisma.StringFilter<"Message"> | string
+  contextWaMessageId?: Prisma.StringNullableFilter<"Message"> | string | null
   fromMe?: Prisma.BoolFilter<"Message"> | boolean
   source?: Prisma.StringFilter<"Message"> | string
   type?: Prisma.StringFilter<"Message"> | string
@@ -285,6 +295,7 @@ export type MessageOrderByWithAggregationInput = {
   deviceId?: Prisma.SortOrder
   chatId?: Prisma.SortOrder
   waMessageId?: Prisma.SortOrder
+  contextWaMessageId?: Prisma.SortOrderInput | Prisma.SortOrder
   fromMe?: Prisma.SortOrder
   source?: Prisma.SortOrder
   type?: Prisma.SortOrder
@@ -306,6 +317,7 @@ export type MessageScalarWhereWithAggregatesInput = {
   deviceId?: Prisma.StringWithAggregatesFilter<"Message"> | string
   chatId?: Prisma.StringWithAggregatesFilter<"Message"> | string
   waMessageId?: Prisma.StringWithAggregatesFilter<"Message"> | string
+  contextWaMessageId?: Prisma.StringNullableWithAggregatesFilter<"Message"> | string | null
   fromMe?: Prisma.BoolWithAggregatesFilter<"Message"> | boolean
   source?: Prisma.StringWithAggregatesFilter<"Message"> | string
   type?: Prisma.StringWithAggregatesFilter<"Message"> | string
@@ -319,6 +331,7 @@ export type MessageScalarWhereWithAggregatesInput = {
 export type MessageCreateInput = {
   id?: string
   waMessageId: string
+  contextWaMessageId?: string | null
   fromMe: boolean
   source?: string
   type?: string
@@ -336,6 +349,7 @@ export type MessageUncheckedCreateInput = {
   deviceId: string
   chatId: string
   waMessageId: string
+  contextWaMessageId?: string | null
   fromMe: boolean
   source?: string
   type?: string
@@ -349,6 +363,7 @@ export type MessageUncheckedCreateInput = {
 export type MessageUpdateInput = {
   id?: Prisma.StringFieldUpdateOperationsInput | string
   waMessageId?: Prisma.StringFieldUpdateOperationsInput | string
+  contextWaMessageId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   fromMe?: Prisma.BoolFieldUpdateOperationsInput | boolean
   source?: Prisma.StringFieldUpdateOperationsInput | string
   type?: Prisma.StringFieldUpdateOperationsInput | string
@@ -366,6 +381,7 @@ export type MessageUncheckedUpdateInput = {
   deviceId?: Prisma.StringFieldUpdateOperationsInput | string
   chatId?: Prisma.StringFieldUpdateOperationsInput | string
   waMessageId?: Prisma.StringFieldUpdateOperationsInput | string
+  contextWaMessageId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   fromMe?: Prisma.BoolFieldUpdateOperationsInput | boolean
   source?: Prisma.StringFieldUpdateOperationsInput | string
   type?: Prisma.StringFieldUpdateOperationsInput | string
@@ -381,6 +397,7 @@ export type MessageCreateManyInput = {
   deviceId: string
   chatId: string
   waMessageId: string
+  contextWaMessageId?: string | null
   fromMe: boolean
   source?: string
   type?: string
@@ -394,6 +411,7 @@ export type MessageCreateManyInput = {
 export type MessageUpdateManyMutationInput = {
   id?: Prisma.StringFieldUpdateOperationsInput | string
   waMessageId?: Prisma.StringFieldUpdateOperationsInput | string
+  contextWaMessageId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   fromMe?: Prisma.BoolFieldUpdateOperationsInput | boolean
   source?: Prisma.StringFieldUpdateOperationsInput | string
   type?: Prisma.StringFieldUpdateOperationsInput | string
@@ -409,6 +427,7 @@ export type MessageUncheckedUpdateManyInput = {
   deviceId?: Prisma.StringFieldUpdateOperationsInput | string
   chatId?: Prisma.StringFieldUpdateOperationsInput | string
   waMessageId?: Prisma.StringFieldUpdateOperationsInput | string
+  contextWaMessageId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   fromMe?: Prisma.BoolFieldUpdateOperationsInput | boolean
   source?: Prisma.StringFieldUpdateOperationsInput | string
   type?: Prisma.StringFieldUpdateOperationsInput | string
@@ -440,6 +459,7 @@ export type MessageCountOrderByAggregateInput = {
   deviceId?: Prisma.SortOrder
   chatId?: Prisma.SortOrder
   waMessageId?: Prisma.SortOrder
+  contextWaMessageId?: Prisma.SortOrder
   fromMe?: Prisma.SortOrder
   source?: Prisma.SortOrder
   type?: Prisma.SortOrder
@@ -455,6 +475,7 @@ export type MessageMaxOrderByAggregateInput = {
   deviceId?: Prisma.SortOrder
   chatId?: Prisma.SortOrder
   waMessageId?: Prisma.SortOrder
+  contextWaMessageId?: Prisma.SortOrder
   fromMe?: Prisma.SortOrder
   source?: Prisma.SortOrder
   type?: Prisma.SortOrder
@@ -470,6 +491,7 @@ export type MessageMinOrderByAggregateInput = {
   deviceId?: Prisma.SortOrder
   chatId?: Prisma.SortOrder
   waMessageId?: Prisma.SortOrder
+  contextWaMessageId?: Prisma.SortOrder
   fromMe?: Prisma.SortOrder
   source?: Prisma.SortOrder
   type?: Prisma.SortOrder
@@ -567,6 +589,7 @@ export type MessageUncheckedUpdateManyWithoutChatNestedInput = {
 export type MessageCreateWithoutDeviceInput = {
   id?: string
   waMessageId: string
+  contextWaMessageId?: string | null
   fromMe: boolean
   source?: string
   type?: string
@@ -582,6 +605,7 @@ export type MessageUncheckedCreateWithoutDeviceInput = {
   id?: string
   chatId: string
   waMessageId: string
+  contextWaMessageId?: string | null
   fromMe: boolean
   source?: string
   type?: string
@@ -626,6 +650,7 @@ export type MessageScalarWhereInput = {
   deviceId?: Prisma.StringFilter<"Message"> | string
   chatId?: Prisma.StringFilter<"Message"> | string
   waMessageId?: Prisma.StringFilter<"Message"> | string
+  contextWaMessageId?: Prisma.StringNullableFilter<"Message"> | string | null
   fromMe?: Prisma.BoolFilter<"Message"> | boolean
   source?: Prisma.StringFilter<"Message"> | string
   type?: Prisma.StringFilter<"Message"> | string
@@ -639,6 +664,7 @@ export type MessageScalarWhereInput = {
 export type MessageCreateWithoutChatInput = {
   id?: string
   waMessageId: string
+  contextWaMessageId?: string | null
   fromMe: boolean
   source?: string
   type?: string
@@ -654,6 +680,7 @@ export type MessageUncheckedCreateWithoutChatInput = {
   id?: string
   deviceId: string
   waMessageId: string
+  contextWaMessageId?: string | null
   fromMe: boolean
   source?: string
   type?: string
@@ -694,6 +721,7 @@ export type MessageCreateManyDeviceInput = {
   id?: string
   chatId: string
   waMessageId: string
+  contextWaMessageId?: string | null
   fromMe: boolean
   source?: string
   type?: string
@@ -707,6 +735,7 @@ export type MessageCreateManyDeviceInput = {
 export type MessageUpdateWithoutDeviceInput = {
   id?: Prisma.StringFieldUpdateOperationsInput | string
   waMessageId?: Prisma.StringFieldUpdateOperationsInput | string
+  contextWaMessageId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   fromMe?: Prisma.BoolFieldUpdateOperationsInput | boolean
   source?: Prisma.StringFieldUpdateOperationsInput | string
   type?: Prisma.StringFieldUpdateOperationsInput | string
@@ -722,6 +751,7 @@ export type MessageUncheckedUpdateWithoutDeviceInput = {
   id?: Prisma.StringFieldUpdateOperationsInput | string
   chatId?: Prisma.StringFieldUpdateOperationsInput | string
   waMessageId?: Prisma.StringFieldUpdateOperationsInput | string
+  contextWaMessageId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   fromMe?: Prisma.BoolFieldUpdateOperationsInput | boolean
   source?: Prisma.StringFieldUpdateOperationsInput | string
   type?: Prisma.StringFieldUpdateOperationsInput | string
@@ -736,6 +766,7 @@ export type MessageUncheckedUpdateManyWithoutDeviceInput = {
   id?: Prisma.StringFieldUpdateOperationsInput | string
   chatId?: Prisma.StringFieldUpdateOperationsInput | string
   waMessageId?: Prisma.StringFieldUpdateOperationsInput | string
+  contextWaMessageId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   fromMe?: Prisma.BoolFieldUpdateOperationsInput | boolean
   source?: Prisma.StringFieldUpdateOperationsInput | string
   type?: Prisma.StringFieldUpdateOperationsInput | string
@@ -750,6 +781,7 @@ export type MessageCreateManyChatInput = {
   id?: string
   deviceId: string
   waMessageId: string
+  contextWaMessageId?: string | null
   fromMe: boolean
   source?: string
   type?: string
@@ -763,6 +795,7 @@ export type MessageCreateManyChatInput = {
 export type MessageUpdateWithoutChatInput = {
   id?: Prisma.StringFieldUpdateOperationsInput | string
   waMessageId?: Prisma.StringFieldUpdateOperationsInput | string
+  contextWaMessageId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   fromMe?: Prisma.BoolFieldUpdateOperationsInput | boolean
   source?: Prisma.StringFieldUpdateOperationsInput | string
   type?: Prisma.StringFieldUpdateOperationsInput | string
@@ -778,6 +811,7 @@ export type MessageUncheckedUpdateWithoutChatInput = {
   id?: Prisma.StringFieldUpdateOperationsInput | string
   deviceId?: Prisma.StringFieldUpdateOperationsInput | string
   waMessageId?: Prisma.StringFieldUpdateOperationsInput | string
+  contextWaMessageId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   fromMe?: Prisma.BoolFieldUpdateOperationsInput | boolean
   source?: Prisma.StringFieldUpdateOperationsInput | string
   type?: Prisma.StringFieldUpdateOperationsInput | string
@@ -792,6 +826,7 @@ export type MessageUncheckedUpdateManyWithoutChatInput = {
   id?: Prisma.StringFieldUpdateOperationsInput | string
   deviceId?: Prisma.StringFieldUpdateOperationsInput | string
   waMessageId?: Prisma.StringFieldUpdateOperationsInput | string
+  contextWaMessageId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   fromMe?: Prisma.BoolFieldUpdateOperationsInput | boolean
   source?: Prisma.StringFieldUpdateOperationsInput | string
   type?: Prisma.StringFieldUpdateOperationsInput | string
@@ -809,6 +844,7 @@ export type MessageSelect<ExtArgs extends runtime.Types.Extensions.InternalArgs 
   deviceId?: boolean
   chatId?: boolean
   waMessageId?: boolean
+  contextWaMessageId?: boolean
   fromMe?: boolean
   source?: boolean
   type?: boolean
@@ -828,6 +864,7 @@ export type MessageSelectScalar = {
   deviceId?: boolean
   chatId?: boolean
   waMessageId?: boolean
+  contextWaMessageId?: boolean
   fromMe?: boolean
   source?: boolean
   type?: boolean
@@ -838,7 +875,7 @@ export type MessageSelectScalar = {
   rawJson?: boolean
 }
 
-export type MessageOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "deviceId" | "chatId" | "waMessageId" | "fromMe" | "source" | "type" | "text" | "mediaPath" | "timestamp" | "status" | "rawJson", ExtArgs["result"]["message"]>
+export type MessageOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "deviceId" | "chatId" | "waMessageId" | "contextWaMessageId" | "fromMe" | "source" | "type" | "text" | "mediaPath" | "timestamp" | "status" | "rawJson", ExtArgs["result"]["message"]>
 export type MessageInclude<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   device?: boolean | Prisma.DeviceDefaultArgs<ExtArgs>
   chat?: boolean | Prisma.ChatDefaultArgs<ExtArgs>
@@ -855,6 +892,7 @@ export type $MessagePayload<ExtArgs extends runtime.Types.Extensions.InternalArg
     deviceId: string
     chatId: string
     waMessageId: string
+    contextWaMessageId: string | null
     fromMe: boolean
     source: string
     type: string
@@ -1238,6 +1276,7 @@ export interface MessageFieldRefs {
   readonly deviceId: Prisma.FieldRef<"Message", 'String'>
   readonly chatId: Prisma.FieldRef<"Message", 'String'>
   readonly waMessageId: Prisma.FieldRef<"Message", 'String'>
+  readonly contextWaMessageId: Prisma.FieldRef<"Message", 'String'>
   readonly fromMe: Prisma.FieldRef<"Message", 'Boolean'>
   readonly source: Prisma.FieldRef<"Message", 'String'>
   readonly type: Prisma.FieldRef<"Message", 'String'>

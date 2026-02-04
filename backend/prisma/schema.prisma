@@ -21,6 +21,11 @@ model Device {
   number          String?
   status          String   @default("DISCONNECTED") // CONNECTED, DISCONNECTED, QR_READY, CONNECTING
   qr              String?
+  providerType    String   @default("BAILEYS") // BAILEYS, CLOUD
+  cloudPhoneNumberId     String?
+  cloudBusinessAccountId String?
+  cloudAccessTokenEnc    String?  @db.LongText
+  cloudVerifyToken       String?
   lastUpdate      DateTime @updatedAt
   sessions        Message[]
   chats           Chat[]
@@ -50,6 +55,7 @@ model Message {
   chatId          String
   chat            Chat     @relation(fields: [chatId], references: [id])
   waMessageId     String   @unique
+  contextWaMessageId String?
   fromMe          Boolean
   source          String   @default("whatsapp") // panel, whatsapp
   type            String   @default("text") // text, audio, image, video, document

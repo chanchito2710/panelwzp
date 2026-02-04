@@ -79,6 +79,11 @@ export const DeviceScalarFieldEnum = {
   number: 'number',
   status: 'status',
   qr: 'qr',
+  providerType: 'providerType',
+  cloudPhoneNumberId: 'cloudPhoneNumberId',
+  cloudBusinessAccountId: 'cloudBusinessAccountId',
+  cloudAccessTokenEnc: 'cloudAccessTokenEnc',
+  cloudVerifyToken: 'cloudVerifyToken',
   lastUpdate: 'lastUpdate'
 } as const
 
@@ -106,6 +111,7 @@ export const MessageScalarFieldEnum = {
   deviceId: 'deviceId',
   chatId: 'chatId',
   waMessageId: 'waMessageId',
+  contextWaMessageId: 'contextWaMessageId',
   fromMe: 'fromMe',
   source: 'source',
   type: 'type',
@@ -150,7 +156,12 @@ export const DeviceOrderByRelevanceFieldEnum = {
   name: 'name',
   number: 'number',
   status: 'status',
-  qr: 'qr'
+  qr: 'qr',
+  providerType: 'providerType',
+  cloudPhoneNumberId: 'cloudPhoneNumberId',
+  cloudBusinessAccountId: 'cloudBusinessAccountId',
+  cloudAccessTokenEnc: 'cloudAccessTokenEnc',
+  cloudVerifyToken: 'cloudVerifyToken'
 } as const
 
 export type DeviceOrderByRelevanceFieldEnum = (typeof DeviceOrderByRelevanceFieldEnum)[keyof typeof DeviceOrderByRelevanceFieldEnum]
@@ -173,6 +184,7 @@ export const MessageOrderByRelevanceFieldEnum = {
   deviceId: 'deviceId',
   chatId: 'chatId',
   waMessageId: 'waMessageId',
+  contextWaMessageId: 'contextWaMessageId',
   source: 'source',
   type: 'type',
   text: 'text',

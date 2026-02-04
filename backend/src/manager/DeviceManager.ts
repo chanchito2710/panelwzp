@@ -17,11 +17,12 @@ import { spawn } from 'child_process';
 import ffmpegPath from 'ffmpeg-static';
 import { Server as SocketServer } from 'socket.io';
 import cron from 'node-cron';
-import { encryptSensitiveFields, decryptSensitiveFields } from '../utils/crypto';
+import { encrypt, encryptSensitiveFields, decryptSensitiveFields } from '../utils/crypto';
 import { DB_ROOT, dbPath } from '../config/paths';
 import { ensureDir } from '../config/ensureDir';
 import { markIncomingMessage } from '../auth/statsStore';
 import { getPrisma } from '../db/prisma';
+import { ProviderError } from '../whatsapp/types';
 
 // Logger silencioso para Baileys (evita spam de logs de conexión/stream)
 // En producción solo mostrar errores, en desarrollo mostrar warnings
@@ -337,6 +338,11 @@ interface Device {
     phoneNumber: string | null;
     status: 'CONNECTED' | 'DISCONNECTED' | 'QR_READY' | 'CONNECTING' | 'PAIRING_CODE_READY' | 'RECONNECTING';
     qr: string | null;
+    providerType?: 'BAILEYS' | 'CLOUD';
+    cloudPhoneNumberId?: string | null;
+    cloudBusinessAccountId?: string | null;
+    cloudAccessTokenEnc?: string | null;
+    cloudVerifyToken?: string | null;
 }
 
 interface FileMetadata {
@@ -369,6 +375,7 @@ export class DeviceManager {
     private messagesDbRoot = dbPath('messages');
     private messageWriteChains: Map<string, Promise<void>> = new Map();
     private recentPersistedIds: Map<string, { ids: string[]; set: Set<string> }> = new Map();
+    private cloudMessageIndex: Map<string, Map<string, string>> = new Map();
 
     private constructor() {
         ensureDir(DB_ROOT);
@@ -424,7 +431,7 @@ export class DeviceManager {
         console.log('[AutoReconnect] Proceso completado');
     }
 
-    private async dbUpsertDeviceRecord(device: { id: string; name: string; status?: string; qr?: string | null; phoneNumber?: string | null; number?: string | null }) {
+    private async dbUpsertDeviceRecord(device: any) {
         const prisma = getPrisma();
         if (!prisma) return;
         const id = String(device?.id || '').trim();
@@ -433,11 +440,37 @@ export class DeviceManager {
         const number = (device as any)?.phoneNumber ?? (device as any)?.number ?? null;
         const status = String((device as any)?.status || 'DISCONNECTED');
         const qr = (device as any)?.qr ?? null;
+        const providerType = String((device as any)?.providerType || 'BAILEYS').trim().toUpperCase();
+        const cloudPhoneNumberId = (device as any)?.cloudPhoneNumberId ? String((device as any).cloudPhoneNumberId).trim() : null;
+        const cloudBusinessAccountId = (device as any)?.cloudBusinessAccountId ? String((device as any).cloudBusinessAccountId).trim() : null;
+        const cloudAccessTokenEnc = (device as any)?.cloudAccessTokenEnc ? String((device as any).cloudAccessTokenEnc).trim() : null;
+        const cloudVerifyToken = (device as any)?.cloudVerifyToken ? String((device as any).cloudVerifyToken).trim() : null;
         try {
             await prisma.device.upsert({
                 where: { id },
-                create: { id, name, number: number ? String(number) : null, status, qr },
-                update: { name, number: number ? String(number) : null, status, qr }
+                create: {
+                    id,
+                    name,
+                    number: number ? String(number) : null,
+                    status,
+                    qr,
+                    providerType: providerType === 'CLOUD' ? 'CLOUD' : 'BAILEYS',
+                    cloudPhoneNumberId,
+                    cloudBusinessAccountId,
+                    cloudAccessTokenEnc,
+                    cloudVerifyToken
+                },
+                update: {
+                    name,
+                    number: number ? String(number) : null,
+                    status,
+                    qr,
+                    providerType: providerType === 'CLOUD' ? 'CLOUD' : 'BAILEYS',
+                    cloudPhoneNumberId,
+                    cloudBusinessAccountId,
+                    cloudAccessTokenEnc,
+                    cloudVerifyToken
+                }
             });
         } catch {}
     }
@@ -451,6 +484,7 @@ export class DeviceManager {
         lastMessageAtMs: number;
         profilePhotoUrl?: string | null;
         waMessageId?: string | null;
+        contextWaMessageId?: string | null;
         fromMe: boolean;
         source: string;
         type: string;
@@ -552,6 +586,7 @@ export class DeviceManager {
                     deviceId,
                     chatId: chat.id,
                     waMessageId,
+                    contextWaMessageId: args.contextWaMessageId ? String(args.contextWaMessageId) : null,
                     fromMe: Boolean(args.fromMe),
                     source: String(args.source || 'whatsapp'),
                     type: String(args.type || 'text'),
@@ -879,6 +914,21 @@ export class DeviceManager {
         return 'phone';
     }
 
+    private async resolveProviderType(deviceId: string): Promise<'BAILEYS' | 'CLOUD'> {
+        const local = (this.devices as any[]).find((d) => String(d?.id || '') === String(deviceId || ''));
+        const localType = String(local?.providerType || '').trim().toUpperCase();
+        if (localType === 'CLOUD') return 'CLOUD';
+        if (localType === 'BAILEYS') return 'BAILEYS';
+
+        const prisma = getPrisma();
+        if (prisma) {
+            const row = await prisma.device.findUnique({ where: { id: String(deviceId) }, select: { providerType: true } }).catch(() => null);
+            const dbType = String((row as any)?.providerType || '').trim().toUpperCase();
+            if (dbType === 'CLOUD') return 'CLOUD';
+        }
+        return 'BAILEYS';
+    }
+
     private async transcodeToOggOpus(inputBuffer: Buffer): Promise<Buffer> {
         if (!ffmpegPath) throw new Error('ffmpeg no disponible');
         const ffmpeg = ffmpegPath as string;
@@ -981,7 +1031,10 @@ export class DeviceManager {
                     name: String(device?.name ?? ''),
                     phoneNumber: device?.phoneNumber ?? null,
                     status: device?.status ?? 'DISCONNECTED',
-                    qr: device?.qr ?? null
+                    qr: device?.qr ?? null,
+                    providerType: (String(device?.providerType || 'BAILEYS').toUpperCase() === 'CLOUD' ? 'CLOUD' : 'BAILEYS'),
+                    cloudPhoneNumberId: device?.cloudPhoneNumberId ?? null,
+                    cloudBusinessAccountId: device?.cloudBusinessAccountId ?? null
                 };
                 let unreadCount = 0;
                 try {
@@ -995,7 +1048,18 @@ export class DeviceManager {
 
     public createDevice(name: string) {
         const id = Math.random().toString(36).substr(2, 9);
-        const newDevice: Device = { id, name, phoneNumber: null, status: 'DISCONNECTED', qr: null };
+        const newDevice: Device = {
+            id,
+            name,
+            phoneNumber: null,
+            status: 'DISCONNECTED',
+            qr: null,
+            providerType: 'BAILEYS',
+            cloudPhoneNumberId: null,
+            cloudBusinessAccountId: null,
+            cloudAccessTokenEnc: null,
+            cloudVerifyToken: null
+        };
         this.devices.push(newDevice);
         this.saveDevices();
         void this.dbUpsertDeviceRecord(newDevice as any);
@@ -1012,17 +1076,69 @@ export class DeviceManager {
         }
     }
 
-    public renameDevice(id: string, name: string) {
-        if (typeof name !== 'string') throw new Error('Nombre inválido');
-        const trimmedName = name.trim();
-        if (!trimmedName) throw new Error('El nombre no puede estar vacío');
-        if (trimmedName.length > 60) throw new Error('El nombre es demasiado largo');
-
+    public updateDeviceSettings(
+        id: string,
+        patch: {
+            name?: string;
+            providerType?: 'BAILEYS' | 'CLOUD' | string;
+            cloudPhoneNumberId?: string | null;
+            cloudBusinessAccountId?: string | null;
+            cloudAccessToken?: string | null;
+            cloudVerifyToken?: string | null;
+        }
+    ) {
         const exists = this.devices.some(d => d.id === id);
         if (!exists) return null;
 
-        this.updateDevice(id, { name: trimmedName });
+        const update: Partial<Device> = {};
+
+        if (patch?.name !== undefined && patch?.name !== null) {
+            if (typeof patch.name !== 'string') throw new Error('Nombre inválido');
+            const trimmedName = patch.name.trim();
+            if (!trimmedName) throw new Error('El nombre no puede estar vacío');
+            if (trimmedName.length > 60) throw new Error('El nombre es demasiado largo');
+            update.name = trimmedName;
+        }
+
+        if (patch?.providerType !== undefined && patch?.providerType !== null) {
+            const t = String(patch.providerType || '').trim().toUpperCase();
+            if (t !== 'BAILEYS' && t !== 'CLOUD') throw new Error('providerType inválido');
+            update.providerType = t as any;
+            if (t === 'CLOUD') {
+                update.qr = null;
+                update.status = 'DISCONNECTED';
+            }
+        }
+
+        if (patch?.cloudPhoneNumberId !== undefined) {
+            update.cloudPhoneNumberId = patch.cloudPhoneNumberId ? String(patch.cloudPhoneNumberId).trim() : null;
+        }
+        if (patch?.cloudBusinessAccountId !== undefined) {
+            update.cloudBusinessAccountId = patch.cloudBusinessAccountId ? String(patch.cloudBusinessAccountId).trim() : null;
+        }
+        if (patch?.cloudVerifyToken !== undefined) {
+            update.cloudVerifyToken = patch.cloudVerifyToken ? String(patch.cloudVerifyToken).trim() : null;
+        }
+        if (patch?.cloudAccessToken !== undefined) {
+            const raw = patch.cloudAccessToken ? String(patch.cloudAccessToken) : '';
+            update.cloudAccessTokenEnc = raw ? encrypt(raw) : null;
+        }
+
+        const current = this.devices.find(d => d.id === id) as any;
+        const nextType = String((update as any).providerType || current?.providerType || 'BAILEYS').toUpperCase();
+        if (nextType === 'CLOUD') {
+            const phoneId = (update as any).cloudPhoneNumberId ?? current?.cloudPhoneNumberId;
+            const tokEnc = (update as any).cloudAccessTokenEnc ?? current?.cloudAccessTokenEnc;
+            const configured = Boolean(String(phoneId || '').trim()) && Boolean(String(tokEnc || '').trim());
+            update.status = configured ? 'CONNECTED' : 'DISCONNECTED';
+        }
+
+        this.updateDevice(id, update);
         return this.devices.find(d => d.id === id) || null;
+    }
+
+    public renameDevice(id: string, name: string) {
+        return this.updateDeviceSettings(id, { name });
     }
 
     private initRetentionJob() {
@@ -1427,6 +1543,12 @@ export class DeviceManager {
     public async initDevice(deviceId: string, mode?: 'qr' | 'code') {
         const existingDevice = this.devices.find(d => d.id === deviceId);
         if (!existingDevice) return;
+
+        const providerType = await this.resolveProviderType(deviceId);
+        if (providerType === 'CLOUD') {
+            this.updateDevice(deviceId, { status: 'DISCONNECTED', qr: null });
+            throw new ProviderError('NOT_SUPPORTED', 'Cloud API no usa QR/pairing; configure phone_number_id + token + webhook', 400);
+        }
 
         if (this.sessions.has(deviceId)) {
             this.updateDevice(deviceId, { status: 'CONNECTING' });
@@ -2171,6 +2293,11 @@ export class DeviceManager {
     }
 
     public async requestPairingCode(deviceId: string, phoneNumber: string) {
+        const providerType = await this.resolveProviderType(deviceId);
+        if (providerType === 'CLOUD') {
+            throw new ProviderError('NOT_SUPPORTED', 'Cloud API no soporta pairing code', 400);
+        }
+
         const httpError = (status: number, message: string) =>
             Object.assign(new Error(message), { status });
 
@@ -2272,6 +2399,13 @@ export class DeviceManager {
     }
 
     public async sendMessage(deviceId: string, chatId: string, text: string, quotedMessageId?: string) {
+        const providerType = await this.resolveProviderType(deviceId);
+        if (providerType === 'CLOUD') {
+            const { CloudApiProvider } = await import('../whatsapp/providers/CloudApiProvider');
+            const provider = new CloudApiProvider({ io: this.io });
+            return provider.sendText({ deviceId, chatId, text, quotedMessageId });
+        }
+
         const sock = this.sessions.get(deviceId);
         if (!sock) throw new Error('Device not connected');
 
@@ -2354,6 +2488,13 @@ export class DeviceManager {
     }
 
     public async sendMedia(deviceId: string, chatId: string, fileBuffer: Buffer, mimeType: string, caption?: string, isVoiceNote: boolean = false) {
+        const providerType = await this.resolveProviderType(deviceId);
+        if (providerType === 'CLOUD') {
+            const { CloudApiProvider } = await import('../whatsapp/providers/CloudApiProvider');
+            const provider = new CloudApiProvider({ io: this.io });
+            return provider.sendMedia({ deviceId, chatId, fileBuffer, mimeType, caption, isVoiceNote });
+        }
+
         const sock = this.sessions.get(deviceId);
         if (!sock) throw new Error('Device not connected');
 
@@ -2431,6 +2572,8 @@ export class DeviceManager {
     // ========== GROUP MANAGEMENT ==========
 
     public async getGroups(deviceId: string) {
+        const providerType = await this.resolveProviderType(deviceId);
+        if (providerType === 'CLOUD') throw new ProviderError('NOT_SUPPORTED', 'Cloud API no soporta grupos en este panel', 400);
         const sock = this.sessions.get(deviceId);
         if (!sock) throw new Error('Device not connected');
 
@@ -2452,6 +2595,8 @@ export class DeviceManager {
     }
 
     public async createGroup(deviceId: string, name: string, participants: string[]) {
+        const providerType = await this.resolveProviderType(deviceId);
+        if (providerType === 'CLOUD') throw new ProviderError('NOT_SUPPORTED', 'Cloud API no soporta grupos en este panel', 400);
         const sock = this.sessions.get(deviceId);
         if (!sock) throw new Error('Device not connected');
 
@@ -2464,6 +2609,8 @@ export class DeviceManager {
     }
 
     public async getGroupMetadata(deviceId: string, groupId: string) {
+        const providerType = await this.resolveProviderType(deviceId);
+        if (providerType === 'CLOUD') throw new ProviderError('NOT_SUPPORTED', 'Cloud API no soporta grupos en este panel', 400);
         const sock = this.sessions.get(deviceId);
         if (!sock) throw new Error('Device not connected');
 
@@ -2476,6 +2623,8 @@ export class DeviceManager {
     }
 
     public async addParticipantsToGroup(deviceId: string, groupId: string, participants: string[]) {
+        const providerType = await this.resolveProviderType(deviceId);
+        if (providerType === 'CLOUD') throw new ProviderError('NOT_SUPPORTED', 'Cloud API no soporta grupos en este panel', 400);
         const sock = this.sessions.get(deviceId);
         if (!sock) throw new Error('Device not connected');
 
@@ -2488,6 +2637,8 @@ export class DeviceManager {
     }
 
     public async removeParticipantsFromGroup(deviceId: string, groupId: string, participants: string[]) {
+        const providerType = await this.resolveProviderType(deviceId);
+        if (providerType === 'CLOUD') throw new ProviderError('NOT_SUPPORTED', 'Cloud API no soporta grupos en este panel', 400);
         const sock = this.sessions.get(deviceId);
         if (!sock) throw new Error('Device not connected');
 
@@ -2500,6 +2651,8 @@ export class DeviceManager {
     }
 
     public async promoteParticipants(deviceId: string, groupId: string, participants: string[]) {
+        const providerType = await this.resolveProviderType(deviceId);
+        if (providerType === 'CLOUD') throw new ProviderError('NOT_SUPPORTED', 'Cloud API no soporta grupos en este panel', 400);
         const sock = this.sessions.get(deviceId);
         if (!sock) throw new Error('Device not connected');
 
@@ -2512,6 +2665,8 @@ export class DeviceManager {
     }
 
     public async demoteParticipants(deviceId: string, groupId: string, participants: string[]) {
+        const providerType = await this.resolveProviderType(deviceId);
+        if (providerType === 'CLOUD') throw new ProviderError('NOT_SUPPORTED', 'Cloud API no soporta grupos en este panel', 400);
         const sock = this.sessions.get(deviceId);
         if (!sock) throw new Error('Device not connected');
 
@@ -2524,6 +2679,8 @@ export class DeviceManager {
     }
 
     public async updateGroupSubject(deviceId: string, groupId: string, subject: string) {
+        const providerType = await this.resolveProviderType(deviceId);
+        if (providerType === 'CLOUD') throw new ProviderError('NOT_SUPPORTED', 'Cloud API no soporta grupos en este panel', 400);
         const sock = this.sessions.get(deviceId);
         if (!sock) throw new Error('Device not connected');
 
@@ -2536,6 +2693,8 @@ export class DeviceManager {
     }
 
     public async updateGroupDescription(deviceId: string, groupId: string, description: string) {
+        const providerType = await this.resolveProviderType(deviceId);
+        if (providerType === 'CLOUD') throw new ProviderError('NOT_SUPPORTED', 'Cloud API no soporta grupos en este panel', 400);
         const sock = this.sessions.get(deviceId);
         if (!sock) throw new Error('Device not connected');
 
@@ -2548,6 +2707,8 @@ export class DeviceManager {
     }
 
     public async leaveGroup(deviceId: string, groupId: string) {
+        const providerType = await this.resolveProviderType(deviceId);
+        if (providerType === 'CLOUD') throw new ProviderError('NOT_SUPPORTED', 'Cloud API no soporta grupos en este panel', 400);
         const sock = this.sessions.get(deviceId);
         if (!sock) throw new Error('Device not connected');
 
@@ -2562,6 +2723,8 @@ export class DeviceManager {
     // ========== CHAT MANAGEMENT ==========
 
     public async importChatProfilePhoto(deviceId: string, chatId: string) {
+        const providerType = await this.resolveProviderType(deviceId);
+        if (providerType === 'CLOUD') throw new ProviderError('NOT_SUPPORTED', 'Cloud API no soporta importar foto de perfil', 400);
         const sock = this.sessions.get(deviceId);
         if (!sock) throw new Error('Device not connected');
 
@@ -2603,8 +2766,9 @@ export class DeviceManager {
     }
 
     public async getChats(deviceId: string) {
+        const providerType = await this.resolveProviderType(deviceId);
         const sock = this.sessions.get(deviceId);
-        if (!sock) throw new Error('Device not connected');
+        if (providerType === 'BAILEYS' && !sock) throw new Error('Device not connected');
 
         try {
             const prisma = getPrisma();
@@ -3139,8 +3303,9 @@ export class DeviceManager {
     }
 
     public async getChatMessages(deviceId: string, chatId: string, limit: number = 50) {
+        const providerType = await this.resolveProviderType(deviceId);
         const sock = this.sessions.get(deviceId);
-        if (!sock) throw new Error('Device not connected');
+        if (providerType === 'BAILEYS' && !sock) throw new Error('Device not connected');
 
         // Marcar como leído automáticamente al obtener mensajes
         this.markChatAsRead(deviceId, chatId);
@@ -3148,48 +3313,50 @@ export class DeviceManager {
         try {
             const prisma = getPrisma();
             if (prisma) {
-                const cutoff = dbReadCutoffDate();
-                const storeForCanonical = stores.get(deviceId);
-                const canonicalId = storeForCanonical ? resolveCanonicalChatId(storeForCanonical, chatId) : chatId;
+                try {
+                    const cutoff = dbReadCutoffDate();
+                    const storeForCanonical = stores.get(deviceId);
+                    const canonicalId = storeForCanonical ? resolveCanonicalChatId(storeForCanonical, chatId) : chatId;
 
-                const chatRow = await prisma.chat.findUnique({
-                    where: { deviceId_waChatId: { deviceId, waChatId: canonicalId } },
-                    select: { id: true }
-                });
-                if (!chatRow) return [];
+                    const chatRow = await prisma.chat.findUnique({
+                        where: { deviceId_waChatId: { deviceId, waChatId: canonicalId } },
+                        select: { id: true }
+                    });
+                    if (chatRow) {
+                        const take = Math.max(1, Math.min(500, Math.floor(Number(limit || 50))));
+                        const msgs = await prisma.message.findMany({
+                            where: { deviceId, chatId: chatRow.id, timestamp: { gte: cutoff } },
+                            orderBy: { timestamp: 'desc' },
+                            take
+                        });
 
-                const take = Math.max(1, Math.min(500, Math.floor(Number(limit || 50))));
-                const msgs = await prisma.message.findMany({
-                    where: { deviceId, chatId: chatRow.id, timestamp: { gte: cutoff } },
-                    orderBy: { timestamp: 'desc' },
-                    take
-                });
-
-                return msgs
-                    .slice()
-                    .reverse()
-                    .map((m: any) => {
-                        let parsed: any = null;
-                        try {
-                            parsed = m.rawJson ? JSON.parse(m.rawJson) : null;
-                        } catch {
-                            parsed = null;
-                        }
-                        const media = parsed?.media || null;
-                        const location = parsed?.location || null;
-                        const senderName = parsed?.senderName || null;
-                        return {
-                            id: m.waMessageId,
-                            text: m.text ?? null,
-                            fromMe: Boolean(m.fromMe),
-                            timestamp: m.timestamp ? new Date(m.timestamp).getTime() : Date.now(),
-                            source: (m.source as any) || (m.fromMe ? 'phone' : 'contact'),
-                            media,
-                            location,
-                            senderName
-                        };
-                    })
-                    .filter((m: any) => Number(m?.timestamp || 0) >= dbReadCutoffMs());
+                        return msgs
+                            .slice()
+                            .reverse()
+                            .map((m: any) => {
+                                let parsed: any = null;
+                                try {
+                                    parsed = m.rawJson ? JSON.parse(m.rawJson) : null;
+                                } catch {
+                                    parsed = null;
+                                }
+                                const media = parsed?.media || null;
+                                const location = parsed?.location || null;
+                                const senderName = parsed?.senderName || null;
+                                return {
+                                    id: m.waMessageId,
+                                    text: m.text ?? null,
+                                    fromMe: Boolean(m.fromMe),
+                                    timestamp: m.timestamp ? new Date(m.timestamp).getTime() : Date.now(),
+                                    source: (m.source as any) || (m.fromMe ? 'phone' : 'contact'),
+                                    media,
+                                    location,
+                                    senderName
+                                };
+                            })
+                            .filter((m: any) => Number(m?.timestamp || 0) >= dbReadCutoffMs());
+                    }
+                } catch {}
             }
 
             // Obtener store del dispositivo
@@ -3252,6 +3419,13 @@ export class DeviceManager {
     }
 
     public async stopDevice(deviceId: string) {
+        const providerType = await this.resolveProviderType(deviceId);
+        if (providerType === 'CLOUD') {
+            this.sessions.delete(deviceId);
+            this.updateDevice(deviceId, { status: 'DISCONNECTED', qr: null });
+            return;
+        }
+
         const sock = this.sessions.get(deviceId);
         if (sock) {
             this.clearConnectWatchdog(deviceId);
@@ -3268,6 +3442,12 @@ export class DeviceManager {
 
     public async disconnectAndClean(deviceId: string) {
         console.log(`[${deviceId}] Desconectando y limpiando datos...`);
+
+        const providerType = await this.resolveProviderType(deviceId);
+        if (providerType === 'CLOUD') {
+            await this.stopDevice(deviceId);
+            return { success: true, message: 'Cloud API no mantiene sesión local para limpiar' };
+        }
 
         await this.stopDevice(deviceId);
 
@@ -3594,6 +3774,182 @@ export class DeviceManager {
     private highlightMatch(text: string, query: string): string {
         const regex = new RegExp(`(${query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
         return text.replace(regex, '**$1**');
+    }
+
+    private getCloudIndex(deviceId: string) {
+        const existing = this.cloudMessageIndex.get(deviceId);
+        if (existing) return existing;
+        const next = new Map<string, string>();
+        this.cloudMessageIndex.set(deviceId, next);
+        return next;
+    }
+
+    private async resolveDeviceIdByCloudPhoneNumberId(phoneNumberId: string): Promise<string | null> {
+        const pid = String(phoneNumberId || '').trim();
+        if (!pid) return null;
+        const prisma = getPrisma();
+        if (prisma) {
+            const row = await prisma.device.findFirst({ where: { cloudPhoneNumberId: pid }, select: { id: true } }).catch(() => null);
+            if (row?.id) return String(row.id);
+        }
+        const local = (this.devices as any[]).find((d) => String((d as any)?.cloudPhoneNumberId || '') === pid);
+        return local?.id ? String(local.id) : null;
+    }
+
+    public async handleCloudWebhook(payload: any): Promise<void> {
+        const body = payload || {};
+        const entries = Array.isArray(body?.entry) ? body.entry : [];
+        const prisma = getPrisma();
+
+        for (const entry of entries) {
+            const changes = Array.isArray(entry?.changes) ? entry.changes : [];
+            for (const change of changes) {
+                const value = change?.value || {};
+                const metadata = value?.metadata || {};
+                const phoneNumberId = String(metadata?.phone_number_id || '').trim();
+                const deviceId = await this.resolveDeviceIdByCloudPhoneNumberId(phoneNumberId);
+                if (!deviceId) continue;
+
+                const store = stores.get(deviceId) || createSimpleStore();
+                if (!stores.has(deviceId)) stores.set(deviceId, store);
+
+                const contactsArr = Array.isArray(value?.contacts) ? value.contacts : [];
+                for (const c of contactsArr) {
+                    const waId = String(c?.wa_id || '').trim();
+                    const name = String(c?.profile?.name || '').trim();
+                    if (!waId || !name) continue;
+                    store.contacts.set(`${waId}@s.whatsapp.net`, name);
+                }
+
+                const msgs = Array.isArray(value?.messages) ? value.messages : [];
+                for (const m of msgs) {
+                    const msgId = String(m?.id || '').trim();
+                    const from = String(m?.from || '').trim();
+                    if (!msgId || !from) continue;
+
+                    const waChatId = `${from}@s.whatsapp.net`;
+                    const tsMs = m?.timestamp ? Number(m.timestamp) * 1000 : Date.now();
+                    const msgType = String(m?.type || 'text');
+                    const text =
+                        msgType === 'text'
+                            ? String(m?.text?.body || '')
+                            : (msgType === 'interactive' ? String(m?.interactive?.body?.text || '') : '');
+                    const contextId = String(m?.context?.id || '').trim() || null;
+
+                    const existingChat = store.chats.get(waChatId) || {
+                        id: waChatId,
+                        name: String(store.contacts.get(waChatId) || waChatId.split('@')[0] || ''),
+                        conversationTimestamp: tsMs,
+                        unreadCount: 0,
+                        lastInboundMessageId: null,
+                        lastOutboundMessageId: null,
+                        lastMessageId: null
+                    };
+                    existingChat.conversationTimestamp = Math.max(Number(existingChat.conversationTimestamp || 0), tsMs);
+                    existingChat.unreadCount = Number(existingChat.unreadCount || 0) + 1;
+                    existingChat.lastInboundMessageId = msgId;
+                    existingChat.lastMessageId = msgId;
+                    store.chats.set(waChatId, existingChat);
+
+                    if (!store.messages.has(waChatId)) store.messages.set(waChatId, []);
+                    const stored = {
+                        key: { id: msgId, remoteJid: waChatId, fromMe: false },
+                        message: { conversation: text },
+                        messageTimestamp: Math.floor(tsMs / 1000),
+                        text,
+                        fromMe: false,
+                        timestamp: tsMs,
+                        media: null,
+                        location: null,
+                        source: 'whatsapp',
+                        senderName: String(store.contacts.get(waChatId) || '').trim() || null
+                    };
+                    store.messages.get(waChatId)!.push(stored);
+                    this.getCloudIndex(deviceId).set(msgId, waChatId);
+
+                    if (prisma) {
+                        const profilePhotoUrl = store.profilePhotos.get(waChatId)?.url || null;
+                        void this.dbUpsertChatAndMessage({
+                            deviceId,
+                            waChatId,
+                            chatName: String(existingChat?.name || '').trim() || null,
+                            isGroup: false,
+                            unreadCount: Number(existingChat.unreadCount || 0),
+                            lastMessageAtMs: tsMs,
+                            profilePhotoUrl,
+                            waMessageId: msgId,
+                            contextWaMessageId: contextId,
+                            fromMe: false,
+                            source: 'whatsapp',
+                            type: msgType,
+                            text: text || null,
+                            mediaPath: null,
+                            rawJson: null
+                        });
+                    }
+
+                    this.io?.emit('message:new', {
+                        deviceId,
+                        chatId: waChatId,
+                        msg: {
+                            id: msgId,
+                            text: text || null,
+                            fromMe: false,
+                            timestamp: tsMs,
+                            media: null,
+                            location: null,
+                            source: 'whatsapp',
+                            senderName: stored.senderName
+                        }
+                    });
+                }
+
+                const statuses = Array.isArray(value?.statuses) ? value.statuses : [];
+                for (const s of statuses) {
+                    const msgId = String(s?.id || '').trim();
+                    if (!msgId) continue;
+                    const st = String(s?.status || '').trim();
+                    if (!st) continue;
+                    const tsMs = s?.timestamp ? Number(s.timestamp) * 1000 : Date.now();
+
+                    let waChatId = this.getCloudIndex(deviceId).get(msgId) || '';
+                    if (!waChatId && prisma) {
+                        const row = await prisma.message
+                            .findUnique({ where: { waMessageId: msgId }, select: { chat: { select: { waChatId: true } } } })
+                            .catch(() => null);
+                        waChatId = row?.chat?.waChatId ? String(row.chat.waChatId) : '';
+                    }
+                    if (!waChatId) continue;
+
+                    if (store.messages.has(waChatId)) {
+                        const arr = store.messages.get(waChatId) || [];
+                        for (let i = arr.length - 1; i >= 0 && i >= arr.length - 500; i--) {
+                            const m = arr[i];
+                            const id = m?.key?.id || m?.id;
+                            if (id === msgId) {
+                                m.status = st;
+                                break;
+                            }
+                        }
+                    }
+
+                    if (prisma) {
+                        void prisma.message.updateMany({ where: { waMessageId: msgId }, data: { status: st } }).catch(() => {});
+                    }
+
+                    const isLastMessage = Boolean(store && store.chats.get(waChatId)?.lastMessageId === msgId);
+                    const chatLastMessageId = store ? String(store.chats.get(waChatId)?.lastMessageId || '') : '';
+                    this.io?.emit('message:update', {
+                        deviceId,
+                        chatId: waChatId,
+                        msgId,
+                        isLastMessage,
+                        chatLastMessageId: chatLastMessageId || null,
+                        patch: { status: st, timestamp: tsMs }
+                    });
+                }
+            }
+        }
     }
 
     // Reset completo del cache de un dispositivo (mantiene sesión de WhatsApp)
