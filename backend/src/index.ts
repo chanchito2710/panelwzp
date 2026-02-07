@@ -77,11 +77,6 @@ const notifyOwner = (event: any) => {
 const deviceManager = DeviceManager.getInstance();
 const templateManager = TemplateManager.getInstance();
 const labelManager = LabelManager.getInstance();
-
-const errorStatus = (error: any, fallback = 500) => {
-    const n = Number(error?.status);
-    return Number.isFinite(n) && n >= 100 && n <= 599 ? n : fallback;
-};
 deviceManager.setIO(io);
 
 // Configuración de multer para manejo de archivos
@@ -107,30 +102,6 @@ try {
     }
 } catch {}
 app.use('/storage', express.static(path.join(DB_ROOT, 'storage')));
-
-app.get('/webhook/whatsapp', async (req, res) => {
-    const mode = String(req.query['hub.mode'] || '').trim();
-    const token = String(req.query['hub.verify_token'] || '').trim();
-    const challenge = String(req.query['hub.challenge'] || '').trim();
-    if (mode !== 'subscribe' || !token || !challenge) return res.status(400).send('Bad Request');
-
-    const envToken = String(process.env.WHATSAPP_CLOUD_VERIFY_TOKEN || '').trim();
-    if (envToken && token === envToken) return res.status(200).send(challenge);
-
-    const prisma = getPrisma();
-    if (prisma) {
-        const ok = await prisma.device.findFirst({ where: { cloudVerifyToken: token }, select: { id: true } }).catch(() => null);
-        if (ok?.id) return res.status(200).send(challenge);
-    }
-    return res.status(403).send('Forbidden');
-});
-
-app.post('/webhook/whatsapp', async (req, res) => {
-    try {
-        await deviceManager.handleCloudWebhook(req.body);
-    } catch {}
-    res.sendStatus(200);
-});
 
 app.post('/api/auth/login', async (req, res) => {
     try {
@@ -611,17 +582,10 @@ app.post('/api/devices', (req, res) => {
 
 app.patch('/api/devices/:id', (req, res) => {
     try {
-        const { name, providerType, cloudPhoneNumberId, cloudBusinessAccountId, cloudAccessToken, cloudVerifyToken } = req.body || {};
-        const updated = deviceManager.updateDeviceSettings(req.params.id, {
-            name,
-            providerType,
-            cloudPhoneNumberId,
-            cloudBusinessAccountId,
-            cloudAccessToken,
-            cloudVerifyToken
-        });
+        const { name } = req.body;
+        const updated = deviceManager.renameDevice(req.params.id, name);
         if (!updated) return res.status(404).json({ error: 'Dispositivo no encontrado' });
-        audit(req, 'device_updated', null, { deviceId: req.params.id, name: String(name || ''), providerType: String(providerType || '') });
+        audit(req, 'device_renamed', null, { deviceId: req.params.id, name: String(name || '') });
         res.json(updated);
     } catch (error: any) {
         res.status(400).json({ error: error.message || 'Error al actualizar dispositivo' });
@@ -633,7 +597,7 @@ app.post('/api/devices/:id/start', async (req, res) => {
         await deviceManager.initDevice(req.params.id, 'qr');
         res.json({ success: true });
     } catch (error: any) {
-        res.status(errorStatus(error)).json({ error: error.message });
+        res.status(500).json({ error: error.message });
     }
 });
 

@@ -30,11 +30,6 @@ export type DeviceMinAggregateOutputType = {
   number: string | null
   status: string | null
   qr: string | null
-  providerType: string | null
-  cloudPhoneNumberId: string | null
-  cloudBusinessAccountId: string | null
-  cloudAccessTokenEnc: string | null
-  cloudVerifyToken: string | null
   lastUpdate: Date | null
 }
 
@@ -44,11 +39,6 @@ export type DeviceMaxAggregateOutputType = {
   number: string | null
   status: string | null
   qr: string | null
-  providerType: string | null
-  cloudPhoneNumberId: string | null
-  cloudBusinessAccountId: string | null
-  cloudAccessTokenEnc: string | null
-  cloudVerifyToken: string | null
   lastUpdate: Date | null
 }
 
@@ -58,11 +48,6 @@ export type DeviceCountAggregateOutputType = {
   number: number
   status: number
   qr: number
-  providerType: number
-  cloudPhoneNumberId: number
-  cloudBusinessAccountId: number
-  cloudAccessTokenEnc: number
-  cloudVerifyToken: number
   lastUpdate: number
   _all: number
 }
@@ -74,11 +59,6 @@ export type DeviceMinAggregateInputType = {
   number?: true
   status?: true
   qr?: true
-  providerType?: true
-  cloudPhoneNumberId?: true
-  cloudBusinessAccountId?: true
-  cloudAccessTokenEnc?: true
-  cloudVerifyToken?: true
   lastUpdate?: true
 }
 
@@ -88,11 +68,6 @@ export type DeviceMaxAggregateInputType = {
   number?: true
   status?: true
   qr?: true
-  providerType?: true
-  cloudPhoneNumberId?: true
-  cloudBusinessAccountId?: true
-  cloudAccessTokenEnc?: true
-  cloudVerifyToken?: true
   lastUpdate?: true
 }
 
@@ -102,11 +77,6 @@ export type DeviceCountAggregateInputType = {
   number?: true
   status?: true
   qr?: true
-  providerType?: true
-  cloudPhoneNumberId?: true
-  cloudBusinessAccountId?: true
-  cloudAccessTokenEnc?: true
-  cloudVerifyToken?: true
   lastUpdate?: true
   _all?: true
 }
@@ -189,11 +159,6 @@ export type DeviceGroupByOutputType = {
   number: string | null
   status: string
   qr: string | null
-  providerType: string
-  cloudPhoneNumberId: string | null
-  cloudBusinessAccountId: string | null
-  cloudAccessTokenEnc: string | null
-  cloudVerifyToken: string | null
   lastUpdate: Date
   _count: DeviceCountAggregateOutputType | null
   _min: DeviceMinAggregateOutputType | null
@@ -224,11 +189,6 @@ export type DeviceWhereInput = {
   number?: Prisma.StringNullableFilter<"Device"> | string | null
   status?: Prisma.StringFilter<"Device"> | string
   qr?: Prisma.StringNullableFilter<"Device"> | string | null
-  providerType?: Prisma.StringFilter<"Device"> | string
-  cloudPhoneNumberId?: Prisma.StringNullableFilter<"Device"> | string | null
-  cloudBusinessAccountId?: Prisma.StringNullableFilter<"Device"> | string | null
-  cloudAccessTokenEnc?: Prisma.StringNullableFilter<"Device"> | string | null
-  cloudVerifyToken?: Prisma.StringNullableFilter<"Device"> | string | null
   lastUpdate?: Prisma.DateTimeFilter<"Device"> | Date | string
   sessions?: Prisma.MessageListRelationFilter
   chats?: Prisma.ChatListRelationFilter
@@ -240,11 +200,6 @@ export type DeviceOrderByWithRelationInput = {
   number?: Prisma.SortOrderInput | Prisma.SortOrder
   status?: Prisma.SortOrder
   qr?: Prisma.SortOrderInput | Prisma.SortOrder
-  providerType?: Prisma.SortOrder
-  cloudPhoneNumberId?: Prisma.SortOrderInput | Prisma.SortOrder
-  cloudBusinessAccountId?: Prisma.SortOrderInput | Prisma.SortOrder
-  cloudAccessTokenEnc?: Prisma.SortOrderInput | Prisma.SortOrder
-  cloudVerifyToken?: Prisma.SortOrderInput | Prisma.SortOrder
   lastUpdate?: Prisma.SortOrder
   sessions?: Prisma.MessageOrderByRelationAggregateInput
   chats?: Prisma.ChatOrderByRelationAggregateInput
@@ -260,11 +215,6 @@ export type DeviceWhereUniqueInput = Prisma.AtLeast<{
   number?: Prisma.StringNullableFilter<"Device"> | string | null
   status?: Prisma.StringFilter<"Device"> | string
   qr?: Prisma.StringNullableFilter<"Device"> | string | null
-  providerType?: Prisma.StringFilter<"Device"> | string
-  cloudPhoneNumberId?: Prisma.StringNullableFilter<"Device"> | string | null
-  cloudBusinessAccountId?: Prisma.StringNullableFilter<"Device"> | string | null
-  cloudAccessTokenEnc?: Prisma.StringNullableFilter<"Device"> | string | null
-  cloudVerifyToken?: Prisma.StringNullableFilter<"Device"> | string | null
   lastUpdate?: Prisma.DateTimeFilter<"Device"> | Date | string
   sessions?: Prisma.MessageListRelationFilter
   chats?: Prisma.ChatListRelationFilter
@@ -276,11 +226,6 @@ export type DeviceOrderByWithAggregationInput = {
   number?: Prisma.SortOrderInput | Prisma.SortOrder
   status?: Prisma.SortOrder
   qr?: Prisma.SortOrderInput | Prisma.SortOrder
-  providerType?: Prisma.SortOrder
-  cloudPhoneNumberId?: Prisma.SortOrderInput | Prisma.SortOrder
-  cloudBusinessAccountId?: Prisma.SortOrderInput | Prisma.SortOrder
-  cloudAccessTokenEnc?: Prisma.SortOrderInput | Prisma.SortOrder
-  cloudVerifyToken?: Prisma.SortOrderInput | Prisma.SortOrder
   lastUpdate?: Prisma.SortOrder
   _count?: Prisma.DeviceCountOrderByAggregateInput
   _max?: Prisma.DeviceMaxOrderByAggregateInput
@@ -296,11 +241,6 @@ export type DeviceScalarWhereWithAggregatesInput = {
   number?: Prisma.StringNullableWithAggregatesFilter<"Device"> | string | null
   status?: Prisma.StringWithAggregatesFilter<"Device"> | string
   qr?: Prisma.StringNullableWithAggregatesFilter<"Device"> | string | null
-  providerType?: Prisma.StringWithAggregatesFilter<"Device"> | string
-  cloudPhoneNumberId?: Prisma.StringNullableWithAggregatesFilter<"Device"> | string | null
-  cloudBusinessAccountId?: Prisma.StringNullableWithAggregatesFilter<"Device"> | string | null
-  cloudAccessTokenEnc?: Prisma.StringNullableWithAggregatesFilter<"Device"> | string | null
-  cloudVerifyToken?: Prisma.StringNullableWithAggregatesFilter<"Device"> | string | null
   lastUpdate?: Prisma.DateTimeWithAggregatesFilter<"Device"> | Date | string
 }
 
@@ -310,11 +250,6 @@ export type DeviceCreateInput = {
   number?: string | null
   status?: string
   qr?: string | null
-  providerType?: string
-  cloudPhoneNumberId?: string | null
-  cloudBusinessAccountId?: string | null
-  cloudAccessTokenEnc?: string | null
-  cloudVerifyToken?: string | null
   lastUpdate?: Date | string
   sessions?: Prisma.MessageCreateNestedManyWithoutDeviceInput
   chats?: Prisma.ChatCreateNestedManyWithoutDeviceInput
@@ -326,11 +261,6 @@ export type DeviceUncheckedCreateInput = {
   number?: string | null
   status?: string
   qr?: string | null
-  providerType?: string
-  cloudPhoneNumberId?: string | null
-  cloudBusinessAccountId?: string | null
-  cloudAccessTokenEnc?: string | null
-  cloudVerifyToken?: string | null
   lastUpdate?: Date | string
   sessions?: Prisma.MessageUncheckedCreateNestedManyWithoutDeviceInput
   chats?: Prisma.ChatUncheckedCreateNestedManyWithoutDeviceInput
@@ -342,11 +272,6 @@ export type DeviceUpdateInput = {
   number?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   status?: Prisma.StringFieldUpdateOperationsInput | string
   qr?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
-  providerType?: Prisma.StringFieldUpdateOperationsInput | string
-  cloudPhoneNumberId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
-  cloudBusinessAccountId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
-  cloudAccessTokenEnc?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
-  cloudVerifyToken?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   lastUpdate?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   sessions?: Prisma.MessageUpdateManyWithoutDeviceNestedInput
   chats?: Prisma.ChatUpdateManyWithoutDeviceNestedInput
@@ -358,11 +283,6 @@ export type DeviceUncheckedUpdateInput = {
   number?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   status?: Prisma.StringFieldUpdateOperationsInput | string
   qr?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
-  providerType?: Prisma.StringFieldUpdateOperationsInput | string
-  cloudPhoneNumberId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
-  cloudBusinessAccountId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
-  cloudAccessTokenEnc?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
-  cloudVerifyToken?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   lastUpdate?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   sessions?: Prisma.MessageUncheckedUpdateManyWithoutDeviceNestedInput
   chats?: Prisma.ChatUncheckedUpdateManyWithoutDeviceNestedInput
@@ -374,11 +294,6 @@ export type DeviceCreateManyInput = {
   number?: string | null
   status?: string
   qr?: string | null
-  providerType?: string
-  cloudPhoneNumberId?: string | null
-  cloudBusinessAccountId?: string | null
-  cloudAccessTokenEnc?: string | null
-  cloudVerifyToken?: string | null
   lastUpdate?: Date | string
 }
 
@@ -388,11 +303,6 @@ export type DeviceUpdateManyMutationInput = {
   number?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   status?: Prisma.StringFieldUpdateOperationsInput | string
   qr?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
-  providerType?: Prisma.StringFieldUpdateOperationsInput | string
-  cloudPhoneNumberId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
-  cloudBusinessAccountId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
-  cloudAccessTokenEnc?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
-  cloudVerifyToken?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   lastUpdate?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
 }
 
@@ -402,11 +312,6 @@ export type DeviceUncheckedUpdateManyInput = {
   number?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   status?: Prisma.StringFieldUpdateOperationsInput | string
   qr?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
-  providerType?: Prisma.StringFieldUpdateOperationsInput | string
-  cloudPhoneNumberId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
-  cloudBusinessAccountId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
-  cloudAccessTokenEnc?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
-  cloudVerifyToken?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   lastUpdate?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
 }
 
@@ -422,11 +327,6 @@ export type DeviceCountOrderByAggregateInput = {
   number?: Prisma.SortOrder
   status?: Prisma.SortOrder
   qr?: Prisma.SortOrder
-  providerType?: Prisma.SortOrder
-  cloudPhoneNumberId?: Prisma.SortOrder
-  cloudBusinessAccountId?: Prisma.SortOrder
-  cloudAccessTokenEnc?: Prisma.SortOrder
-  cloudVerifyToken?: Prisma.SortOrder
   lastUpdate?: Prisma.SortOrder
 }
 
@@ -436,11 +336,6 @@ export type DeviceMaxOrderByAggregateInput = {
   number?: Prisma.SortOrder
   status?: Prisma.SortOrder
   qr?: Prisma.SortOrder
-  providerType?: Prisma.SortOrder
-  cloudPhoneNumberId?: Prisma.SortOrder
-  cloudBusinessAccountId?: Prisma.SortOrder
-  cloudAccessTokenEnc?: Prisma.SortOrder
-  cloudVerifyToken?: Prisma.SortOrder
   lastUpdate?: Prisma.SortOrder
 }
 
@@ -450,11 +345,6 @@ export type DeviceMinOrderByAggregateInput = {
   number?: Prisma.SortOrder
   status?: Prisma.SortOrder
   qr?: Prisma.SortOrder
-  providerType?: Prisma.SortOrder
-  cloudPhoneNumberId?: Prisma.SortOrder
-  cloudBusinessAccountId?: Prisma.SortOrder
-  cloudAccessTokenEnc?: Prisma.SortOrder
-  cloudVerifyToken?: Prisma.SortOrder
   lastUpdate?: Prisma.SortOrder
 }
 
@@ -509,11 +399,6 @@ export type DeviceCreateWithoutChatsInput = {
   number?: string | null
   status?: string
   qr?: string | null
-  providerType?: string
-  cloudPhoneNumberId?: string | null
-  cloudBusinessAccountId?: string | null
-  cloudAccessTokenEnc?: string | null
-  cloudVerifyToken?: string | null
   lastUpdate?: Date | string
   sessions?: Prisma.MessageCreateNestedManyWithoutDeviceInput
 }
@@ -524,11 +409,6 @@ export type DeviceUncheckedCreateWithoutChatsInput = {
   number?: string | null
   status?: string
   qr?: string | null
-  providerType?: string
-  cloudPhoneNumberId?: string | null
-  cloudBusinessAccountId?: string | null
-  cloudAccessTokenEnc?: string | null
-  cloudVerifyToken?: string | null
   lastUpdate?: Date | string
   sessions?: Prisma.MessageUncheckedCreateNestedManyWithoutDeviceInput
 }
@@ -555,11 +435,6 @@ export type DeviceUpdateWithoutChatsInput = {
   number?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   status?: Prisma.StringFieldUpdateOperationsInput | string
   qr?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
-  providerType?: Prisma.StringFieldUpdateOperationsInput | string
-  cloudPhoneNumberId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
-  cloudBusinessAccountId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
-  cloudAccessTokenEnc?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
-  cloudVerifyToken?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   lastUpdate?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   sessions?: Prisma.MessageUpdateManyWithoutDeviceNestedInput
 }
@@ -570,11 +445,6 @@ export type DeviceUncheckedUpdateWithoutChatsInput = {
   number?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   status?: Prisma.StringFieldUpdateOperationsInput | string
   qr?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
-  providerType?: Prisma.StringFieldUpdateOperationsInput | string
-  cloudPhoneNumberId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
-  cloudBusinessAccountId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
-  cloudAccessTokenEnc?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
-  cloudVerifyToken?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   lastUpdate?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   sessions?: Prisma.MessageUncheckedUpdateManyWithoutDeviceNestedInput
 }
@@ -585,11 +455,6 @@ export type DeviceCreateWithoutSessionsInput = {
   number?: string | null
   status?: string
   qr?: string | null
-  providerType?: string
-  cloudPhoneNumberId?: string | null
-  cloudBusinessAccountId?: string | null
-  cloudAccessTokenEnc?: string | null
-  cloudVerifyToken?: string | null
   lastUpdate?: Date | string
   chats?: Prisma.ChatCreateNestedManyWithoutDeviceInput
 }
@@ -600,11 +465,6 @@ export type DeviceUncheckedCreateWithoutSessionsInput = {
   number?: string | null
   status?: string
   qr?: string | null
-  providerType?: string
-  cloudPhoneNumberId?: string | null
-  cloudBusinessAccountId?: string | null
-  cloudAccessTokenEnc?: string | null
-  cloudVerifyToken?: string | null
   lastUpdate?: Date | string
   chats?: Prisma.ChatUncheckedCreateNestedManyWithoutDeviceInput
 }
@@ -631,11 +491,6 @@ export type DeviceUpdateWithoutSessionsInput = {
   number?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   status?: Prisma.StringFieldUpdateOperationsInput | string
   qr?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
-  providerType?: Prisma.StringFieldUpdateOperationsInput | string
-  cloudPhoneNumberId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
-  cloudBusinessAccountId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
-  cloudAccessTokenEnc?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
-  cloudVerifyToken?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   lastUpdate?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   chats?: Prisma.ChatUpdateManyWithoutDeviceNestedInput
 }
@@ -646,11 +501,6 @@ export type DeviceUncheckedUpdateWithoutSessionsInput = {
   number?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   status?: Prisma.StringFieldUpdateOperationsInput | string
   qr?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
-  providerType?: Prisma.StringFieldUpdateOperationsInput | string
-  cloudPhoneNumberId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
-  cloudBusinessAccountId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
-  cloudAccessTokenEnc?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
-  cloudVerifyToken?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   lastUpdate?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   chats?: Prisma.ChatUncheckedUpdateManyWithoutDeviceNestedInput
 }
@@ -701,11 +551,6 @@ export type DeviceSelect<ExtArgs extends runtime.Types.Extensions.InternalArgs =
   number?: boolean
   status?: boolean
   qr?: boolean
-  providerType?: boolean
-  cloudPhoneNumberId?: boolean
-  cloudBusinessAccountId?: boolean
-  cloudAccessTokenEnc?: boolean
-  cloudVerifyToken?: boolean
   lastUpdate?: boolean
   sessions?: boolean | Prisma.Device$sessionsArgs<ExtArgs>
   chats?: boolean | Prisma.Device$chatsArgs<ExtArgs>
@@ -720,15 +565,10 @@ export type DeviceSelectScalar = {
   number?: boolean
   status?: boolean
   qr?: boolean
-  providerType?: boolean
-  cloudPhoneNumberId?: boolean
-  cloudBusinessAccountId?: boolean
-  cloudAccessTokenEnc?: boolean
-  cloudVerifyToken?: boolean
   lastUpdate?: boolean
 }
 
-export type DeviceOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "name" | "number" | "status" | "qr" | "providerType" | "cloudPhoneNumberId" | "cloudBusinessAccountId" | "cloudAccessTokenEnc" | "cloudVerifyToken" | "lastUpdate", ExtArgs["result"]["device"]>
+export type DeviceOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "name" | "number" | "status" | "qr" | "lastUpdate", ExtArgs["result"]["device"]>
 export type DeviceInclude<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   sessions?: boolean | Prisma.Device$sessionsArgs<ExtArgs>
   chats?: boolean | Prisma.Device$chatsArgs<ExtArgs>
@@ -747,11 +587,6 @@ export type $DevicePayload<ExtArgs extends runtime.Types.Extensions.InternalArgs
     number: string | null
     status: string
     qr: string | null
-    providerType: string
-    cloudPhoneNumberId: string | null
-    cloudBusinessAccountId: string | null
-    cloudAccessTokenEnc: string | null
-    cloudVerifyToken: string | null
     lastUpdate: Date
   }, ExtArgs["result"]["device"]>
   composites: {}
@@ -1129,11 +964,6 @@ export interface DeviceFieldRefs {
   readonly number: Prisma.FieldRef<"Device", 'String'>
   readonly status: Prisma.FieldRef<"Device", 'String'>
   readonly qr: Prisma.FieldRef<"Device", 'String'>
-  readonly providerType: Prisma.FieldRef<"Device", 'String'>
-  readonly cloudPhoneNumberId: Prisma.FieldRef<"Device", 'String'>
-  readonly cloudBusinessAccountId: Prisma.FieldRef<"Device", 'String'>
-  readonly cloudAccessTokenEnc: Prisma.FieldRef<"Device", 'String'>
-  readonly cloudVerifyToken: Prisma.FieldRef<"Device", 'String'>
   readonly lastUpdate: Prisma.FieldRef<"Device", 'DateTime'>
 }
     

@@ -4,7 +4,7 @@ Este documento describe el proceso completo para desplegar este proyecto en Rail
 
 ## Qué se despliega
 
-- **Backend (API + Socket.IO + WhatsApp)**: expone endpoints `/api/*`, el webhook Cloud `/webhook/whatsapp` y el websocket `/socket.io`.
+- **Backend (API + Socket.IO + Baileys)**: expone endpoints `/api/*` y el websocket `/socket.io`.
 - **Frontend (Vite + React)**: sirve la UI y se conecta al backend por HTTP y Socket.IO.
 - **Volumen persistente (Railway Volume)**: mantiene sesiones de WhatsApp, archivos y credenciales aun con redeploy.
 
@@ -29,8 +29,6 @@ Este documento describe el proceso completo para desplegar este proyecto en Rail
 - `APP_BCRYPT_ROUNDS` (opcional): costo de bcrypt (default 12)
 - `APP_CORS_ORIGINS` (opcional): allowlist de orígenes (comma-separated) o `*`
   - Ej: `https://TU_FRONTEND.up.railway.app`
-- `WHATSAPP_GRAPH_VERSION` (opcional): versión Graph API (default `v21.0`)
-- `WHATSAPP_CLOUD_VERIFY_TOKEN` (opcional): verify token global para el webhook Cloud (si no se setea, puede usarse `cloudVerifyToken` por dispositivo)
 - `DB_ROOT` (opcional): si no se setea, el backend usa el volumen automáticamente si existe
 - `PORT`: lo setea Railway (no tocar)
 
@@ -118,40 +116,12 @@ Objetivo: que **los chats y mensajes no se pierdan** y no haya inconsistencias.
 
 ### 5) Login y vinculación WhatsApp (QR)
 
-Esto aplica para dispositivos `providerType=BAILEYS`.
-
 1. Abrir la URL del frontend.
 2. Loguear con `OWNER_USERNAME`/`OWNER_PASSWORD`.
 3. Crear una sucursal/dispositivo (o usar uno existente).
 4. Iniciar dispositivo → ver QR → escanear desde WhatsApp:
    - WhatsApp → Dispositivos vinculados → Vincular un dispositivo → escanear.
 5. Confirmar que el estado sea `CONNECTED`.
-
-### 5.1) WhatsApp Cloud API (hilos estables)
-
-Esto aplica para dispositivos `providerType=CLOUD`. No hay QR: se recibe por webhook y se envía por Graph API.
-
-1. En Meta (WhatsApp Cloud API) configurar el webhook apuntando a:
-   - `https://TU_BACKEND.up.railway.app/webhook/whatsapp`
-2. Configurar el verify token:
-   - Opción A (global): setear `WHATSAPP_CLOUD_VERIFY_TOKEN` en variables del backend.
-   - Opción B (por dispositivo): setear `cloudVerifyToken` en el dispositivo (ver PATCH abajo).
-3. En Meta, obtener:
-   - `phone_number_id`
-   - Access token con permisos para enviar mensajes
-4. Configurar el dispositivo en el backend (ejemplo):
-
-```bash
-curl -X PATCH "https://TU_BACKEND.up.railway.app/api/devices/DEVICE_ID" \
-  -H "Authorization: Bearer TU_TOKEN_DEL_PANEL" \
-  -H "Content-Type: application/json" \
-  -d "{\"providerType\":\"CLOUD\",\"cloudPhoneNumberId\":\"PHONE_NUMBER_ID\",\"cloudAccessToken\":\"ACCESS_TOKEN\"}"
-```
-
-5. Enviar un mensaje desde un teléfono real al número Cloud:
-   - Debe aparecer en el panel como `message:new`.
-6. Responder desde el panel usando reply:
-   - El backend envía `context.message_id` si encuentra el mensaje original en DB/store.
 
 ## Backups del volumen (recomendado)
 
